@@ -674,7 +674,7 @@ void _showWhyRecommendedDialog(
           ),
           const SizedBox(height: 14),
           const Text(
-            'TarangX recommendations are calculated 100% on-device using local listening signals. Zero history or personal data is transmitted to external servers.',
+            'TarangX scores and ranks recommendations privately on-device using local listening signals. Your personal listening history and taste profile are never transmitted to external providers.',
             style: TextStyle(
               fontFamily: 'Gilroy',
               fontSize: 12,

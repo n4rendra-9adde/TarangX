@@ -2009,7 +2009,7 @@ class _PersonalizedRecommendationsSection extends StatelessWidget {
                               ),
                             ),
                             Text(
-                              'Private on-device recommendations',
+                              'Private on-device personalization',
                               style: TextStyle(
                                 fontFamily: 'Gilroy',
                                 fontSize: 11.5,
@@ -2363,7 +2363,7 @@ class _DiscoverArtistCardState extends State<_DiscoverArtistCard> {
         child: GestureDetector(
           onTap: () {
             HapticFeedback.lightImpact();
-            widget.onTap();
+            _showArtistBottomSheet(context);
           },
           onLongPress: () => _showArtistBottomSheet(context),
           onSecondaryTap: () => _showArtistBottomSheet(context),

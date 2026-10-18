@@ -83,8 +83,11 @@ class RecommendationCubit extends Cubit<RecommendationState> {
     if (state is RecommendationLoaded) {
       final current = state as RecommendationLoaded;
       final updated = current.collections.filterDisliked(
-        dislikedTrackIds: {track.id},
-        dislikedArtistNames: {},
+        dislikedTrackIds: {
+          ..._collector.currentProfile.dislikedTrackIds,
+          track.id,
+        },
+        dislikedArtistNames: _collector.currentProfile.dislikedArtistNames,
       );
 
       if (updated.isEmpty) {
@@ -104,8 +107,11 @@ class RecommendationCubit extends Cubit<RecommendationState> {
     if (state is RecommendationLoaded) {
       final current = state as RecommendationLoaded;
       final updated = current.collections.filterDisliked(
-        dislikedTrackIds: {},
-        dislikedArtistNames: {artistName},
+        dislikedTrackIds: _collector.currentProfile.dislikedTrackIds,
+        dislikedArtistNames: {
+          ..._collector.currentProfile.dislikedArtistNames,
+          artistName,
+        },
       );
 
       if (updated.isEmpty) {
