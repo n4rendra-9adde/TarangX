@@ -6,9 +6,9 @@
 
 <p align="center">
   <a href="https://github.com/n4rendra-9adde/TarangX/releases/latest"><img alt="GitHub Releases" src="https://img.shields.io/github/v/release/n4rendra-9adde/TarangX?display_name=release&style=for-the-badge&color=8B5CF6" ></a>
-  <img src="https://img.shields.io/badge/Android-3DDC84?style=for-the-badge&logo=android&logoColor=white" />
-  <img src="https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black"/>
-  <img src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" />
+  <a href="https://github.com/n4rendra-9adde/TarangX/releases/latest/download/TarangX-Android.apk"><img src="https://img.shields.io/badge/Android-Download%20APK-3DDC84?style=for-the-badge&logo=android&logoColor=white" /></a>
+  <a href="https://github.com/n4rendra-9adde/TarangX/releases/latest/download/TarangX-Linux.tar.gz"><img src="https://img.shields.io/badge/Linux-Download%20Package-FCC624?style=for-the-badge&logo=linux&logoColor=black"/></a>
+  <a href="https://github.com/n4rendra-9adde/TarangX/releases/latest/download/TarangX-Windows.zip"><img src="https://img.shields.io/badge/Windows-Download%20ZIP-0078D6?style=for-the-badge&logo=windows&logoColor=white" /></a>
 </p>
 
 **TarangX** is a modern, open-source dark luxury music player designed to give you absolute freedom over your audio. Seamlessly mix your **local device music** with an infinite universe of streams powered by a secure, **Rust-backed plugin system**. No ads, no interruptions—just your tunes, your way. ⚡🎵
@@ -61,13 +61,36 @@
 
 <h2 align="center">📥 Download & Install</h2>
 
-<h4 align="center">Available for Android, Windows & Linux 😍</h4>
+<h4 align="center">Direct Downloads for Android, Linux & Windows</h4>
+
+<p align="center">
+  <a href="https://github.com/n4rendra-9adde/TarangX/releases/latest/download/TarangX-Android.apk">
+    <img src="https://img.shields.io/badge/Android-Download%20APK-3DDC84?style=for-the-badge&logo=android&logoColor=white" height="40"/>
+  </a>
+  &nbsp;
+  <a href="https://github.com/n4rendra-9adde/TarangX/releases/latest/download/TarangX-Linux.tar.gz">
+    <img src="https://img.shields.io/badge/Linux-Download%20Package-FCC624?style=for-the-badge&logo=linux&logoColor=black" height="40"/>
+  </a>
+  &nbsp;
+  <a href="https://github.com/n4rendra-9adde/TarangX/releases/latest/download/TarangX-Windows.zip">
+    <img src="https://img.shields.io/badge/Windows-Download%20ZIP-0078D6?style=for-the-badge&logo=windows&logoColor=white" height="40"/>
+  </a>
+</p>
 
 <p align="center">
   <a href="https://github.com/n4rendra-9adde/TarangX/releases/latest">
-    <img src="https://img.shields.io/badge/GitHub_Releases-100000?style=for-the-badge&logo=github&logoColor=white" height="40"/>
+    <img src="https://img.shields.io/badge/All%20Releases%20&%20Architectures-GitHub%20Releases-100000?style=for-the-badge&logo=github&logoColor=white" height="34"/>
   </a>
 </p>
+
+| Platform | Format / Architecture | Direct Download |
+|:---|:---|:---|
+| 📱 **Android** | Universal APK (`all architectures`) | [⬇️ **Download Latest APK**](https://github.com/n4rendra-9adde/TarangX/releases/latest/download/TarangX-Android.apk) |
+| 📱 **Android** | 64-bit ARM (`arm64-v8a`) | [⬇️ Download arm64 APK](https://github.com/n4rendra-9adde/TarangX/releases/latest/download/TarangX-Android-arm64.apk) |
+| 📱 **Android** | 32-bit ARM (`armeabi-v7a`) | [⬇️ Download armeabi APK](https://github.com/n4rendra-9adde/TarangX/releases/latest/download/TarangX-Android-armeabi-v7a.apk) |
+| 🐧 **Linux** | 64-bit Tarball (`x86_64`) | [⬇️ **Download Latest Linux**](https://github.com/n4rendra-9adde/TarangX/releases/latest/download/TarangX-Linux.tar.gz) |
+| 🪟 **Windows** | 64-bit Portable ZIP (`x64`) | [⬇️ **Download Latest Windows**](https://github.com/n4rendra-9adde/TarangX/releases/latest/download/TarangX-Windows.zip) |
+| 📦 **All Assets** | Release Notes, Changelog & Checksums | [🔍 View All Releases](https://github.com/n4rendra-9adde/TarangX/releases/latest) |
 
 ---
 

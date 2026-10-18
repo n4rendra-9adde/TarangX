@@ -1,43 +1,38 @@
 <script>
 	export let downloads = [
-		{ platform: 'android', icon: 'fa-brands fa-android', name: 'Android',  },
-		{ platform: 'windows', icon: 'fa-brands fa-windows', name: 'Windows', },
-		{ platform: 'linux', icon: 'fa-brands fa-linux', name: 'Linux',}
+		{ platform: 'android', icon: 'fa-brands fa-android', name: 'Android APK', href: 'https://github.com/n4rendra-9adde/TarangX/releases/latest/download/TarangX-Android.apk' },
+		{ platform: 'linux', icon: 'fa-brands fa-linux', name: 'Linux Package', href: 'https://github.com/n4rendra-9adde/TarangX/releases/latest/download/TarangX-Linux.tar.gz' },
+		{ platform: 'windows', icon: 'fa-brands fa-windows', name: 'Windows ZIP', href: 'https://github.com/n4rendra-9adde/TarangX/releases/latest/download/TarangX-Windows.zip' }
 	];
 
-	const githubReleaseLink = "https://github.com/n4rendra-9adde/TarangX/releases";
-	const sourceforgeLink = "https://bloomee.sourceforge.io/";
-
-	function openSourceForge() {
-		window.open(sourceforgeLink, '_blank');
-	}
+	const githubReleaseLink = "https://github.com/n4rendra-9adde/TarangX/releases/latest";
 </script>
 
 <div class="download-section">
-	<!-- Top row of smaller download buttons -->
+	<!-- Top row of platform direct download buttons -->
 	<div class="download-buttons">
 		{#each downloads as download}
-			<a href={download.href} class="download-btn" on:click|preventDefault={openSourceForge}>
+			<a href={download.href} class="download-btn" target="_blank" rel="noopener noreferrer">
 				<i class={download.icon}></i> 
 				<span>{download.name}</span>
 			</a>
 		{/each}
 	</div>
 
-	<!-- Larger buttons for GitHub and SourceForge -->
+	<!-- Larger buttons for Direct APK and GitHub Releases -->
 	<div class="custom-download-buttons">
+		<a href="https://github.com/n4rendra-9adde/TarangX/releases/latest/download/TarangX-Android.apk" class="custom-btn" target="_blank" rel="noopener noreferrer">
+			<i class="fa-brands fa-android"></i>
+			<div class="button-info">
+				<span>Download APK</span>
+				<small>Direct Android Download</small>
+			</div>
+		</a>
 		<a href={githubReleaseLink} class="custom-btn" target="_blank" rel="noopener noreferrer">
 			<i class="fa-brands fa-github"></i>
 			<div class="button-info">
 				<span>GitHub Releases</span>
-				<small>Latest built releases</small>
-			</div>
-		</a>
-		<a href="https://sourceforge.net/projects/bloomee/files/latest/download" class="custom-btn" target="_blank" rel="noopener noreferrer">
-			<img src="https://a.fsdn.com/con/img/sandiego/svg/originals/sf-icon-orange-no_sf.svg" alt="SourceForge Logo" class="sourceforge-icon">
-			<div class="button-info">
-				<span>Download Now</span>
-				<small>SourceForge - Open Source</small>
+				<small>All Platforms & Notes</small>
 			</div>
 		</a>
 	</div>
@@ -136,11 +131,6 @@
 
 	.custom-btn .fa-github {
 		font-size: 1.8rem;
-	}
-
-	.sourceforge-icon {
-		width: 32px;
-		height: 32px;
 	}
 
 	/* Common class for the text content inside custom buttons */
