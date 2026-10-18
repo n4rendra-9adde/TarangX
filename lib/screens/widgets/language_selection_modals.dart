@@ -241,12 +241,21 @@ const List<CuratedLanguagePlaylistData> kCuratedLanguagePlaylists = [
   // Tamil
   CuratedLanguagePlaylistData(
     id: 'tamil_top_50',
-    title: 'Tamil Top 50',
+    title: 'Tamil Top 50 Chartbusters',
     language: 'Tamil',
     subtitle: 'Unstoppable Kollywood bangers, mass beats, and top charts',
     coverUrl:
         'https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=500&auto=format&fit=crop&q=80',
     searchQuery: 'Tamil Top Hits Playlist',
+  ),
+  CuratedLanguagePlaylistData(
+    id: 'tamil_anirudh_hits',
+    title: 'Anirudh Explosive Hits',
+    language: 'Tamil',
+    subtitle: 'Rockstar Anirudh\'s electrifying mass beats & trending anthems',
+    coverUrl:
+        'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&auto=format&fit=crop&q=80',
+    searchQuery: 'Anirudh Ravichander Hits Playlist',
   ),
   CuratedLanguagePlaylistData(
     id: 'tamil_melody',
@@ -256,6 +265,24 @@ const List<CuratedLanguagePlaylistData> kCuratedLanguagePlaylists = [
     coverUrl:
         'https://images.unsplash.com/photo-1511735111819-9a3f7709049c?w=500&auto=format&fit=crop&q=80',
     searchQuery: 'Tamil Romantic Hits Playlist',
+  ),
+  CuratedLanguagePlaylistData(
+    id: 'tamil_kuthu_party',
+    title: 'Tamil Kuthu & Party Anthems',
+    language: 'Tamil',
+    subtitle: 'High-energy local kuthu and street festival dance numbers',
+    coverUrl:
+        'https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=500&auto=format&fit=crop&q=80',
+    searchQuery: 'Tamil Kuthu Dance Songs Playlist',
+  ),
+  CuratedLanguagePlaylistData(
+    id: 'tamil_retro_rahman',
+    title: 'AR Rahman & Ilaiyaraaja Magic',
+    language: 'Tamil',
+    subtitle: 'Vintage masterpieces from the golden legends of Tamil music',
+    coverUrl:
+        'https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=500&auto=format&fit=crop&q=80',
+    searchQuery: 'AR Rahman Ilaiyaraaja Tamil Hits Playlist',
   ),
 
   // Telugu
@@ -277,27 +304,108 @@ const List<CuratedLanguagePlaylistData> kCuratedLanguagePlaylists = [
         'https://images.unsplash.com/photo-1518609878373-06d740f60d8b?w=500&auto=format&fit=crop&q=80',
     searchQuery: 'Telugu Romantic Songs Playlist',
   ),
+  CuratedLanguagePlaylistData(
+    id: 'telugu_party_blast',
+    title: 'DSP & Thaman Party Blast',
+    language: 'Telugu',
+    subtitle: 'High-octane party anthems and mass theater dance tracks',
+    coverUrl:
+        'https://images.unsplash.com/photo-1501386761578-eac5c94b800a?w=500&auto=format&fit=crop&q=80',
+    searchQuery: 'Telugu Party Dance Songs Playlist',
+  ),
+  CuratedLanguagePlaylistData(
+    id: 'telugu_classics',
+    title: 'Golden Telugu Classics',
+    language: 'Telugu',
+    subtitle: 'Evergreen melodies from SPB, Ghantasala & classic cinema',
+    coverUrl:
+        'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=500&auto=format&fit=crop&q=80',
+    searchQuery: 'Old Telugu Golden Hits Playlist',
+  ),
 
   // Malayalam
   CuratedLanguagePlaylistData(
     id: 'malayalam_magic',
-    title: 'Mollywood Melodies',
+    title: 'Mollywood Top 50 Hits',
     language: 'Malayalam',
     subtitle: 'Breathtaking acoustics and new-age Kerala indie music',
     coverUrl:
         'https://images.unsplash.com/photo-1511735111819-9a3f7709049c?w=500&auto=format&fit=crop&q=80',
     searchQuery: 'Malayalam Top Hits Playlist',
   ),
+  CuratedLanguagePlaylistData(
+    id: 'malayalam_sushin_wave',
+    title: 'Sushin Shyam & New Wave',
+    language: 'Malayalam',
+    subtitle: 'The modern electronic-acoustic sound redefining Kerala cinema',
+    coverUrl:
+        'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=500&auto=format&fit=crop&q=80',
+    searchQuery: 'Sushin Shyam Hits Playlist',
+  ),
+  CuratedLanguagePlaylistData(
+    id: 'malayalam_romance',
+    title: 'Kerala Romantic Melodies',
+    language: 'Malayalam',
+    subtitle: 'Gentle raindrops, lush green valleys and warm romantic tunes',
+    coverUrl:
+        'https://images.unsplash.com/photo-1518609878373-06d740f60d8b?w=500&auto=format&fit=crop&q=80',
+    searchQuery: 'Malayalam Romantic Songs Playlist',
+  ),
 
   // Kannada
   CuratedLanguagePlaylistData(
-    id: 'kannada_chartbusters',
-    title: 'Chandanavana Chartbusters',
+    id: 'kannada_trending_top50',
+    title: 'Trending Kannada Hits',
     language: 'Kannada',
-    subtitle: 'Trending songs and upbeat Kannada cinematic music',
+    subtitle: 'Viral chartbusters, trending reels & sensational Kannada hits',
     coverUrl:
-        'https://images.unsplash.com/photo-1487180144351-b8472da7d491?w=500&auto=format&fit=crop&q=80',
-    searchQuery: 'Kannada Top Hits Playlist',
+        'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&auto=format&fit=crop&q=80',
+    searchQuery: 'Trending Kannada Songs 2024 Playlist',
+  ),
+  CuratedLanguagePlaylistData(
+    id: 'kannada_top_50',
+    title: 'Kannada Top 50 Chartbusters',
+    language: 'Kannada',
+    subtitle: 'The 50 most streamed Sandalwood songs ruling the airwaves',
+    coverUrl:
+        'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=500&auto=format&fit=crop&q=80',
+    searchQuery: 'Kannada Top 50 Hits Playlist',
+  ),
+  CuratedLanguagePlaylistData(
+    id: 'kannada_romantic_melodies',
+    title: 'Kannada Romantic Melodies',
+    language: 'Kannada',
+    subtitle: 'Soulful love songs by Sonu Nigam, Sanjith Hegde & Shreya Ghoshal',
+    coverUrl:
+        'https://images.unsplash.com/photo-1518609878373-06d740f60d8b?w=500&auto=format&fit=crop&q=80',
+    searchQuery: 'Best of Kannada Romantic Songs Playlist',
+  ),
+  CuratedLanguagePlaylistData(
+    id: 'kannada_mass_dance',
+    title: 'Chandanavana Mass & Party Anthems',
+    language: 'Kannada',
+    subtitle: 'High-voltage dance numbers, party beats & theater mass songs',
+    coverUrl:
+        'https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=500&auto=format&fit=crop&q=80',
+    searchQuery: 'Kannada Mass Songs Dance Party Playlist',
+  ),
+  CuratedLanguagePlaylistData(
+    id: 'kannada_golden_era',
+    title: 'Golden Era: Dr. Rajkumar & SPB Classics',
+    language: 'Kannada',
+    subtitle: 'Timeless vintage gems from the golden era of Kannada cinema',
+    coverUrl:
+        'https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=500&auto=format&fit=crop&q=80',
+    searchQuery: 'Evergreen Kannada Golden Hits Retro Songs Playlist',
+  ),
+  CuratedLanguagePlaylistData(
+    id: 'kannada_new_releases',
+    title: 'New Kannada Releases 2024',
+    language: 'Kannada',
+    subtitle: 'Fresh singles, soundtrack releases & rising Kannada artists',
+    coverUrl:
+        'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=500&auto=format&fit=crop&q=80',
+    searchQuery: 'Latest Kannada Songs 2024 Playlist',
   ),
 
   // Bhojpuri
@@ -1182,7 +1290,7 @@ class _MusicLanguagePickerSheetState extends State<_MusicLanguagePickerSheet> {
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
               decoration: BoxDecoration(
                 color: Default_Theme.themeColor.withValues(alpha: 0.85),
-                border: Border(
+                border: const Border(
                   top: BorderSide(
                     color: Default_Theme.surfaceBorderSubtle,
                     width: 0.8,

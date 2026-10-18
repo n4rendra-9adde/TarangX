@@ -983,16 +983,281 @@ class _LanguagePlaylistsSection extends StatefulWidget {
       _LanguagePlaylistsSectionState();
 }
 
+class _LanguagePlaylistItem {
+  final String id;
+  final String title;
+  final String subtitle;
+  final String coverUrl;
+  final String language;
+  final bool isFromYouTube;
+  final PlaylistSummary? youtubeSummary;
+  final String? fallbackSearchQuery;
+
+  const _LanguagePlaylistItem({
+    required this.id,
+    required this.title,
+    required this.subtitle,
+    required this.coverUrl,
+    required this.language,
+    this.isFromYouTube = false,
+    this.youtubeSummary,
+    this.fallbackSearchQuery,
+  });
+}
+
 class _LanguagePlaylistsSectionState extends State<_LanguagePlaylistsSection> {
   String _activeTab = 'All';
 
-  Future<void> _handlePlaylistTap(
-    BuildContext context,
-    CuratedLanguagePlaylistData playlist,
-  ) async {
+  /// Cached live YouTube playlists per language key ('Kannada', 'Hindi', etc.)
+  static final Map<String, List<PlaylistSummary>> _cachedYouTubePlaylists = {};
+  final Set<String> _loadingLanguages = {};
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final settings = context.read<SettingsCubit>().state;
+      final languages = settings.musicLanguages.isEmpty
+          ? const ['Hindi', 'English']
+          : settings.musicLanguages;
+      if (_activeTab == 'All') {
+        _fetchPlaylistsForAll(languages);
+      } else {
+        _fetchPlaylistsForLanguage(_activeTab);
+      }
+    });
+  }
+
+  String? _resolveYouTubePluginId(BuildContext context) {
     final pluginState = context.read<PluginBloc>().state;
     final resolvers = pluginState.loadedContentResolvers;
-    if (resolvers.isEmpty) {
+    if (resolvers.isEmpty) return null;
+
+    final preferredId = context.read<SettingsCubit>().state.homePluginId;
+    if (preferredId.isNotEmpty &&
+        resolvers.any((p) => p.manifest.id == preferredId)) {
+      return preferredId;
+    }
+
+    final ytResolver = resolvers.firstWhere(
+      (p) =>
+          p.manifest.id.contains('ytmusic') ||
+          p.manifest.id.contains('ytvideo') ||
+          p.manifest.id.contains('youtube'),
+      orElse: () => resolvers.first,
+    );
+    return ytResolver.manifest.id;
+  }
+
+  Future<void> _fetchPlaylistsForLanguage(
+    String language, {
+    bool force = false,
+  }) async {
+    if (!force && _cachedYouTubePlaylists.containsKey(language)) return;
+    if (_loadingLanguages.contains(language)) return;
+
+    final pluginId = _resolveYouTubePluginId(context);
+    if (pluginId == null) return;
+
+    if (mounted) {
+      setState(() {
+        _loadingLanguages.add(language);
+      });
+    }
+
+    try {
+      final queries = [
+        'Trending $language Songs Playlist',
+        '$language Top 50 Hits Playlist',
+        'Best $language Romantic Songs Playlist',
+        'Latest $language Songs Playlist',
+        '$language Mass Dance Songs Playlist',
+        'Evergreen $language Retro Hits Playlist',
+      ];
+
+      final Set<String> seenIds = {};
+      final List<PlaylistSummary> fetched = [];
+
+      final results = await Future.wait(queries.map((q) async {
+        try {
+          final resp = await ServiceLocator.pluginService.execute(
+            pluginId: pluginId,
+            request: PluginRequest.contentResolver(
+              ContentResolverCommand.search(
+                query: q,
+                filter: ContentSearchFilter.playlist,
+              ),
+            ),
+          );
+          final List<PlaylistSummary> items = [];
+          resp.when(
+            search: (res) {
+              for (final item in res.items) {
+                if (item is MediaItem_Playlist) {
+                  items.add(item.field0);
+                }
+              }
+            },
+            trackDetails: (_) {},
+            albumDetails: (_) {},
+            artistDetails: (_) {},
+            playlistDetails: (_) {},
+            streams: (_) {},
+            moreTracks: (_) {},
+            moreAlbums: (_) {},
+            homeSections: (_) {},
+            loadMoreItems: (_) {},
+            charts: (_) {},
+            chartDetails: (_) {},
+            segments: (_) {},
+            lyricsResult: (_) {},
+            lyricsSearchResults: (_) {},
+            lyricsById: (_, __) {},
+            suggestions: (_) {},
+            canHandle: (_) {},
+            collectionInfo: (_) {},
+            importTracks: (_) {},
+            ack: () {},
+          );
+          return items;
+        } catch (e) {
+          log('Error querying $q: $e', name: '_LanguagePlaylistsSection');
+          return <PlaylistSummary>[];
+        }
+      }));
+
+      for (final batch in results) {
+        for (final item in batch) {
+          if (!seenIds.contains(item.id)) {
+            seenIds.add(item.id);
+            fetched.add(item);
+          }
+        }
+      }
+
+      if (fetched.isNotEmpty) {
+        _cachedYouTubePlaylists[language] = fetched;
+      }
+    } catch (e) {
+      log('Failed to fetch YouTube playlists for $language: $e',
+          name: '_LanguagePlaylistsSection');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loadingLanguages.remove(language);
+        });
+      }
+    }
+  }
+
+  Future<void> _fetchPlaylistsForAll(
+    List<String> languages, {
+    bool force = false,
+  }) async {
+    for (final lang in languages.take(4)) {
+      if (force || !_cachedYouTubePlaylists.containsKey(lang)) {
+        await _fetchPlaylistsForLanguage(lang, force: force);
+      }
+    }
+  }
+
+  List<_LanguagePlaylistItem> _getItemsForDisplay(List<String> languages) {
+    final List<_LanguagePlaylistItem> items = [];
+    final Set<String> seenIds = {};
+
+    if (_activeTab == 'All') {
+      // 1. Gather live YouTube playlists for each selected language
+      for (final lang in languages) {
+        final ytList = _cachedYouTubePlaylists[lang];
+        if (ytList != null && ytList.isNotEmpty) {
+          for (final p in ytList.take(3)) {
+            if (!seenIds.contains(p.id)) {
+              seenIds.add(p.id);
+              items.add(_LanguagePlaylistItem(
+                id: p.id,
+                title: p.title,
+                subtitle: p.owner != null && p.owner!.isNotEmpty
+                    ? '${p.owner} • YouTube'
+                    : '$lang • YouTube',
+                coverUrl: p.thumbnail.url,
+                language: lang,
+                isFromYouTube: true,
+                youtubeSummary: p,
+              ));
+            }
+          }
+        }
+      }
+
+      // 2. Add curated fallback playlists
+      for (final lang in languages) {
+        final curated =
+            kCuratedLanguagePlaylists.where((c) => c.language == lang);
+        for (final c in curated) {
+          if (!seenIds.contains(c.id)) {
+            seenIds.add(c.id);
+            items.add(_LanguagePlaylistItem(
+              id: c.id,
+              title: c.title,
+              subtitle: c.subtitle,
+              coverUrl: c.coverUrl,
+              language: c.language,
+              isFromYouTube: false,
+              fallbackSearchQuery: c.searchQuery,
+            ));
+          }
+        }
+      }
+    } else {
+      final lang = _activeTab;
+      final ytList = _cachedYouTubePlaylists[lang];
+      if (ytList != null && ytList.isNotEmpty) {
+        for (final p in ytList) {
+          if (!seenIds.contains(p.id)) {
+            seenIds.add(p.id);
+            items.add(_LanguagePlaylistItem(
+              id: p.id,
+              title: p.title,
+              subtitle: p.owner != null && p.owner!.isNotEmpty
+                  ? '${p.owner} • YouTube'
+                  : '$lang • YouTube',
+              coverUrl: p.thumbnail.url,
+              language: lang,
+              isFromYouTube: true,
+              youtubeSummary: p,
+            ));
+          }
+        }
+      }
+
+      final curated =
+          kCuratedLanguagePlaylists.where((c) => c.language == lang);
+      for (final c in curated) {
+        if (!seenIds.contains(c.id)) {
+          seenIds.add(c.id);
+          items.add(_LanguagePlaylistItem(
+            id: c.id,
+            title: c.title,
+            subtitle: c.subtitle,
+            coverUrl: c.coverUrl,
+            language: c.language,
+            isFromYouTube: false,
+            fallbackSearchQuery: c.searchQuery,
+          ));
+        }
+      }
+    }
+
+    return items;
+  }
+
+  Future<void> _handlePlaylistTap(
+    BuildContext context,
+    _LanguagePlaylistItem item,
+  ) async {
+    final pluginId = _resolveYouTubePluginId(context);
+    if (pluginId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Please enable a content plugin in Plugin Manager.'),
@@ -1002,19 +1267,30 @@ class _LanguagePlaylistsSectionState extends State<_LanguagePlaylistsSection> {
       return;
     }
 
-    final preferredId = context.read<SettingsCubit>().state.homePluginId;
-    final pluginId = preferredId.isNotEmpty &&
-            resolvers.any((p) => p.manifest.id == preferredId)
-        ? preferredId
-        : resolvers.first.manifest.id;
+    // Direct YouTube PlaylistSummary available
+    if (item.youtubeSummary != null) {
+      if (context.mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => OnlPlaylistView(
+              playlist: item.youtubeSummary!,
+              pluginId: pluginId,
+            ),
+          ),
+        );
+      }
+      return;
+    }
 
-    // Try resolving real remote playlist from plugin
+    // Fallback: search YouTube using searchQuery
     try {
       final response = await ServiceLocator.pluginService.execute(
         pluginId: pluginId,
         request: PluginRequest.contentResolver(
           ContentResolverCommand.search(
-            query: playlist.searchQuery,
+            query: item.fallbackSearchQuery ??
+                '${item.language} ${item.title} Playlist',
             filter: ContentSearchFilter.playlist,
           ),
         ),
@@ -1023,9 +1299,9 @@ class _LanguagePlaylistsSectionState extends State<_LanguagePlaylistsSection> {
       PlaylistSummary? matched;
       response.when(
         search: (results) {
-          for (final item in results.items) {
-            if (item is MediaItem_Playlist) {
-              matched = item.field0;
+          for (final m in results.items) {
+            if (m is MediaItem_Playlist) {
+              matched = m.field0;
               break;
             }
           }
@@ -1068,18 +1344,18 @@ class _LanguagePlaylistsSectionState extends State<_LanguagePlaylistsSection> {
       log('Playlist search error: $e', name: '_LanguagePlaylistsSection');
     }
 
-    // Fallback: open OnlPlaylistView with curated playlist summary
+    // Fallback: open OnlPlaylistView with placeholder summary
     if (context.mounted) {
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => OnlPlaylistView(
             playlist: PlaylistSummary(
-              id: playlist.id,
-              title: playlist.title,
-              owner: '${playlist.language} Music',
+              id: item.id,
+              title: item.title,
+              owner: '${item.language} Music',
               thumbnail: Artwork(
-                url: playlist.coverUrl,
+                url: item.coverUrl,
                 layout: ImageLayout.square,
               ),
             ),
@@ -1105,13 +1381,10 @@ class _LanguagePlaylistsSectionState extends State<_LanguagePlaylistsSection> {
           _activeTab = 'All';
         }
 
-        // Filter playlists by active languages
-        final visiblePlaylists = kCuratedLanguagePlaylists.where((p) {
-          if (_activeTab == 'All') {
-            return languages.contains(p.language);
-          }
-          return p.language == _activeTab;
-        }).toList();
+        final visiblePlaylists = _getItemsForDisplay(languages);
+        final isCurrentlyLoading = _activeTab == 'All'
+            ? _loadingLanguages.isNotEmpty
+            : _loadingLanguages.contains(_activeTab);
 
         return Container(
           margin: const EdgeInsets.only(top: 14, bottom: 6),
@@ -1148,7 +1421,7 @@ class _LanguagePlaylistsSectionState extends State<_LanguagePlaylistsSection> {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            'Curated for ${languages.join(", ")}',
+                            'Trending & Curated for ${languages.join(", ")}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -1162,11 +1435,48 @@ class _LanguagePlaylistsSectionState extends State<_LanguagePlaylistsSection> {
                         ],
                       ),
                     ),
+                    // Refresh from YouTube button
+                    Tooltip(
+                      message: 'Refresh from YouTube',
+                      child: IconButton(
+                        iconSize: 18,
+                        padding: const EdgeInsets.all(6),
+                        constraints: const BoxConstraints(),
+                        icon: isCurrentlyLoading
+                            ? const SizedBox(
+                                width: 15,
+                                height: 15,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Default_Theme.accentLavender,
+                                ),
+                              )
+                            : const Icon(
+                                MingCute.refresh_3_line,
+                                size: 18,
+                                color: Default_Theme.accentLavender,
+                              ),
+                        onPressed: isCurrentlyLoading
+                            ? null
+                            : () {
+                                HapticFeedback.lightImpact();
+                                if (_activeTab == 'All') {
+                                  _fetchPlaylistsForAll(languages, force: true);
+                                } else {
+                                  _fetchPlaylistsForLanguage(
+                                    _activeTab,
+                                    force: true,
+                                  );
+                                }
+                              },
+                      ),
+                    ),
+                    const SizedBox(width: 4),
                     // Quick edit button
                     TextButton.icon(
                       style: TextButton.styleFrom(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 6),
+                            horizontal: 8, vertical: 6),
                         minimumSize: Size.zero,
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
@@ -1216,6 +1526,7 @@ class _LanguagePlaylistsSectionState extends State<_LanguagePlaylistsSection> {
                       onTap: () {
                         HapticFeedback.selectionClick();
                         setState(() => _activeTab = 'All');
+                        _fetchPlaylistsForAll(languages);
                       },
                     ),
                     ...languages.map(
@@ -1225,6 +1536,7 @@ class _LanguagePlaylistsSectionState extends State<_LanguagePlaylistsSection> {
                         onTap: () {
                           HapticFeedback.selectionClick();
                           setState(() => _activeTab = lang);
+                          _fetchPlaylistsForLanguage(lang);
                         },
                       ),
                     ),
@@ -1378,7 +1690,7 @@ class _LanguagePlaylistsSectionState extends State<_LanguagePlaylistsSection> {
 }
 
 class _LanguagePlaylistCard extends StatefulWidget {
-  final CuratedLanguagePlaylistData playlist;
+  final _LanguagePlaylistItem playlist;
   final VoidCallback onTap;
 
   const _LanguagePlaylistCard({
@@ -1430,30 +1742,46 @@ class _LanguagePlaylistCardState extends State<_LanguagePlaylistCard> {
                           fallbackUrl: widget.playlist.coverUrl,
                         ),
                       ),
-                      // Language Tag
+                      // Language / YouTube Tag
                       Positioned(
                         top: 8,
                         left: 8,
                         child: Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 3.5),
+                              horizontal: 7, vertical: 3.5),
                           decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.65),
+                            color: Colors.black.withValues(alpha: 0.72),
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.15),
-                              width: 0.5,
+                              color: widget.playlist.isFromYouTube
+                                  ? const Color(0xFFFF0000)
+                                      .withValues(alpha: 0.35)
+                                  : Colors.white.withValues(alpha: 0.15),
+                              width: 0.6,
                             ),
                           ),
-                          child: Text(
-                            widget.playlist.language.toUpperCase(),
-                            style: const TextStyle(
-                              fontFamily: 'Gilroy',
-                              fontSize: 9.5,
-                              fontWeight: FontWeight.w800,
-                              color: Default_Theme.accentLavender,
-                              letterSpacing: 0.6,
-                            ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (widget.playlist.isFromYouTube) ...[
+                                const Icon(
+                                  MingCute.youtube_fill,
+                                  size: 11,
+                                  color: Color(0xFFFF4E4E),
+                                ),
+                                const SizedBox(width: 3.5),
+                              ],
+                              Text(
+                                widget.playlist.language.toUpperCase(),
+                                style: const TextStyle(
+                                  fontFamily: 'Gilroy',
+                                  fontSize: 9.5,
+                                  fontWeight: FontWeight.w800,
+                                  color: Default_Theme.accentLavender,
+                                  letterSpacing: 0.6,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),

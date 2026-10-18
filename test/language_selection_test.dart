@@ -72,5 +72,27 @@ void main() {
       expect(punjabiVisible, isNotEmpty);
       expect(punjabiVisible.every((p) => p.language == 'Punjabi'), isTrue);
     });
+
+    test('Kannada playlists feature rich multi-theme diversity', () {
+      final kannadaPlaylists = kCuratedLanguagePlaylists
+          .where((p) => p.language == 'Kannada')
+          .toList();
+
+      expect(kannadaPlaylists.length, greaterThanOrEqualTo(5));
+
+      final titles = kannadaPlaylists.map((p) => p.title.toLowerCase()).toList();
+      final queries = kannadaPlaylists.map((p) => p.searchQuery.toLowerCase()).toList();
+
+      // Check for Trending, Top 50, Romance, Mass/Party, Retro/Classics
+      expect(titles.any((t) => t.contains('trending')), isTrue);
+      expect(titles.any((t) => t.contains('top 50') || t.contains('top')), isTrue);
+      expect(titles.any((t) => t.contains('romantic') || t.contains('melodies')), isTrue);
+      expect(titles.any((t) => t.contains('mass') || t.contains('party')), isTrue);
+      expect(titles.any((t) => t.contains('golden') || t.contains('classics')), isTrue);
+
+      // Check YouTube search queries
+      expect(queries.any((q) => q.contains('trending')), isTrue);
+      expect(queries.any((q) => q.contains('romantic')), isTrue);
+    });
   });
 }
