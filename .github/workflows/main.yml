@@ -35,23 +35,23 @@ jobs:
                   $ver = $vLine.Matches[0].Groups[1].Value.Split('+')[0]
                   echo "VERSION=$ver" >> $env:GITHUB_ENV
 
-            - name: Create keystore file
+            - name: Configure Keystore
+              if: "${{ secrets.KEY_STORE != '' }}"
               run: |
                   $b64 = "${{ secrets.KEY_STORE }}"
                   $filename = "./android/tarangx.jks"
                   $bytes =[Convert]::FromBase64String($b64)
                   [IO.File]::WriteAllBytes($filename, $bytes)
-            
-            - name: Create Keystore properties
-              run: |
-                  echo keyPassword=\${{ secrets.KEY_PASSWORD }} > ./android/key.properties
-                  echo storePassword=\${{ secrets.STORE_PASSWORD }} >> ./android/key.properties
-                  echo keyAlias=\${{ secrets.KEY_ALIAS }} >> ./android/key.properties
-            
+                  "storeFile=tarangx.jks" | Out-File -FilePath ./android/key.properties -Encoding utf8
+                  "keyPassword=${{ secrets.KEY_PASSWORD }}" | Out-File -FilePath ./android/key.properties -Append -Encoding utf8
+                  "storePassword=${{ secrets.STORE_PASSWORD }}" | Out-File -FilePath ./android/key.properties -Append -Encoding utf8
+                  "keyAlias=${{ secrets.KEY_ALIAS }}" | Out-File -FilePath ./android/key.properties -Append -Encoding utf8
+
             - name: Build App files
               run: flutter build apk --release --split-per-abi --build-number ${{github.run_number}}
 
             - name: Verify Sign
+              if: "${{ secrets.KEY_STORE != '' }}"
               run: |
                   $buildToolsDir = Get-ChildItem "$env:ANDROID_HOME\build-tools" | Where-Object { $_.PSIsContainer } | Sort-Object Name -Descending | Select-Object -First 1
                   Write-Host "Using build tools version: $($buildToolsDir.Name)"
