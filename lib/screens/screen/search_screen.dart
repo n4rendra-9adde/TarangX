@@ -28,6 +28,15 @@ import 'package:Bloomee/screens/widgets/song_tile.dart';
 import 'package:Bloomee/src/rust/api/plugin/commands.dart';
 import 'package:Bloomee/src/rust/api/plugin/plugin_info.dart';
 import 'package:Bloomee/src/rust/api/plugin/models.dart' as plugin_models;
+import 'package:go_router/go_router.dart';
+import 'package:Bloomee/blocs/library/cubit/library_items_cubit.dart';
+import 'package:Bloomee/core/constants/route_paths.dart';
+import 'package:Bloomee/core/models/media_playlist_model.dart';
+import 'package:Bloomee/plugins/utils/media_id.dart';
+import 'package:Bloomee/screens/screen/common_views/album_view.dart';
+import 'package:Bloomee/screens/screen/common_views/artist_view.dart';
+import 'package:Bloomee/screens/screen/common_views/playlist_view.dart';
+import 'package:Bloomee/utils/load_image.dart';
 
 class SearchScreen extends StatefulWidget {
   final String searchQuery;
@@ -54,6 +63,9 @@ class _SearchScreenState extends State<SearchScreen> {
       ValueNotifier(false);
   final ValueNotifier<int> _highlightedSuggestionIndexNotifier =
       ValueNotifier(-1);
+  final ValueNotifier<({List<Track> tracks, List<PlaylistItemProperties> playlists})>
+      _localResultsNotifier =
+      ValueNotifier((tracks: <Track>[], playlists: <PlaylistItemProperties>[]));
 
   List<({String query, ContentSearchFilter filter})>
       _currentCombinedSuggestions = [];
@@ -101,6 +113,7 @@ class _SearchScreenState extends State<SearchScreen> {
     _activePluginIdNotifier.dispose();
     _isSuggestionPanelOpenNotifier.dispose();
     _highlightedSuggestionIndexNotifier.dispose();
+    _localResultsNotifier.dispose();
     _contentBloc.close();
     super.dispose();
   }
@@ -146,8 +159,7 @@ class _SearchScreenState extends State<SearchScreen> {
   void _performSearch(
       {required String query, required ContentSearchFilter filter}) {
     final normalizedQuery = _normalizeSearchQuery(query);
-    if (normalizedQuery.isEmpty || _activePluginIdNotifier.value == null)
-      return;
+    if (normalizedQuery.isEmpty) return;
 
     context
         .read<SearchSuggestionBloc>()
@@ -155,7 +167,31 @@ class _SearchScreenState extends State<SearchScreen> {
     _setSearchFieldText(normalizedQuery);
     _filterNotifier.value = filter;
     _closeSuggestionPanel();
-    _contentBloc.add(SearchContent(query: normalizedQuery, filter: filter));
+
+    _searchLocalLibrary(normalizedQuery);
+
+    if (_activePluginIdNotifier.value != null) {
+      _contentBloc.add(SearchContent(query: normalizedQuery, filter: filter));
+    }
+  }
+
+  Future<void> _searchLocalLibrary(String query) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) {
+      _localResultsNotifier.value = (tracks: [], playlists: []);
+      return;
+    }
+    try {
+      final libraryCubit = context.read<LibraryItemsCubit>();
+      final tracks = await libraryCubit.searchTracks(trimmed);
+      final qLower = trimmed.toLowerCase();
+      final playlists = libraryCubit.state.playlists
+          .where((p) => p.playlistName.toLowerCase().contains(qLower))
+          .toList();
+      _localResultsNotifier.value = (tracks: tracks, playlists: playlists);
+    } catch (_) {
+      _localResultsNotifier.value = (tracks: [], playlists: []);
+    }
   }
 
   void _doSearch(String query) =>
@@ -172,6 +208,14 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.escape) {
+      if (_isSuggestionPanelOpenNotifier.value) {
+        _closeSuggestionPanel();
+        return KeyEventResult.handled;
+      }
+    }
+
     if (!_isSuggestionPanelOpenNotifier.value ||
         _currentCombinedSuggestions.isEmpty) {
       return KeyEventResult.ignored;
@@ -244,6 +288,9 @@ class _SearchScreenState extends State<SearchScreen> {
                           onSearchRequested: _performSearch,
                           onClearRequested: () {
                             _textEditingController.clear();
+                            _localResultsNotifier.value =
+                                (tracks: <Track>[], playlists: <PlaylistItemProperties>[]);
+                            _contentBloc.add(const ClearSearch());
                             _openSuggestionPanel();
                             context
                                 .read<SearchSuggestionBloc>()
@@ -293,6 +340,9 @@ class _SearchScreenState extends State<SearchScreen> {
                           _ContentSliver(
                             contentBloc: _contentBloc,
                             activePluginNotifier: _activePluginIdNotifier,
+                            localResultsNotifier: _localResultsNotifier,
+                            filterNotifier: _filterNotifier,
+                            onRetrySearch: _triggerSearch,
                           ),
                       ],
                     );
@@ -631,8 +681,9 @@ class _PluginsGlassyBoxSliver extends StatelessWidget {
                                             activePluginNotifier,
                                         onTap: () {
                                           final id = plugin.manifest.id;
-                                          if (activePluginNotifier.value == id)
+                                          if (activePluginNotifier.value == id) {
                                             return;
+                                          }
                                           activePluginNotifier.value = id;
                                           contentBloc.add(
                                               SetActiveContentPlugin(
@@ -641,7 +692,9 @@ class _PluginsGlassyBoxSliver extends StatelessWidget {
                                               .read<SettingsCubit>()
                                               .setSearchPluginId(id);
                                           if (textEditingController.text
-                                              .isNotEmpty) onPluginChanged();
+                                              .isNotEmpty) {
+                                            onPluginChanged();
+                                          }
                                         },
                                       ),
                                     ))
@@ -1155,64 +1208,147 @@ class _EntitySuggestionTile extends StatelessWidget {
 class _ContentSliver extends StatelessWidget {
   final ContentBloc contentBloc;
   final ValueNotifier<String?> activePluginNotifier;
+  final ValueNotifier<({List<Track> tracks, List<PlaylistItemProperties> playlists})>
+      localResultsNotifier;
+  final ValueNotifier<ContentSearchFilter> filterNotifier;
+  final VoidCallback onRetrySearch;
 
-  const _ContentSliver(
-      {required this.contentBloc, required this.activePluginNotifier});
+  const _ContentSliver({
+    required this.contentBloc,
+    required this.activePluginNotifier,
+    required this.localResultsNotifier,
+    required this.filterNotifier,
+    required this.onRetrySearch,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return BlocBuilder<ConnectivityCubit, ConnectivityState>(
-      builder: (context, connState) {
-        if (connState == ConnectivityState.disconnected) {
-          return SliverFillRemaining(
-              hasScrollBody: false,
-              child: SignBoardWidget(
-                  icon: MingCute.wifi_off_line,
-                  message: AppLocalizations.of(context)!.emptyNoInternet));
-        }
+    return ValueListenableBuilder<
+        ({List<Track> tracks, List<PlaylistItemProperties> playlists})>(
+      valueListenable: localResultsNotifier,
+      builder: (context, localResults, _) {
+        final hasLocal =
+            localResults.tracks.isNotEmpty || localResults.playlists.isNotEmpty;
 
-        return BlocBuilder<ContentBloc, ContentState>(
-          bloc: contentBloc,
-          builder: (context, state) {
-            final hasResults = state.searchResults != null &&
-                state.searchResults!.items.isNotEmpty;
+        return BlocBuilder<ConnectivityCubit, ConnectivityState>(
+          builder: (context, connState) {
+            final isOffline = connState == ConnectivityState.disconnected;
 
-            if (state.searchStatus == SearchStatus.loading && !hasResults) {
-              return const SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: Center(
+            return BlocBuilder<ContentBloc, ContentState>(
+              bloc: contentBloc,
+              builder: (context, state) {
+                final hasOnline = state.searchResults != null &&
+                    state.searchResults!.items.isNotEmpty;
+                final isSearching =
+                    state.searchStatus == SearchStatus.loading && !hasOnline;
+
+                if (isOffline) {
+                  if (hasLocal) {
+                    return _SliverSearchResults(
+                      state: state,
+                      activePluginNotifier: activePluginNotifier,
+                      localResults: localResults,
+                      filterNotifier: filterNotifier,
+                      onRetrySearch: onRetrySearch,
+                      isOffline: true,
+                    );
+                  }
+                  return SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: SignBoardWidget(
+                      icon: MingCute.wifi_off_line,
+                      message: AppLocalizations.of(context)!.emptyNoInternet,
+                    ),
+                  );
+                }
+
+                if (isSearching && !hasLocal) {
+                  return const SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: Center(
                       child: CircularProgressIndicator(
-                          color: Default_Theme.accentColor2)));
-            }
-            if ((state.searchStatus == SearchStatus.loading ||
-                    state.searchStatus == SearchStatus.loaded ||
-                    state.searchStatus == SearchStatus.loadingMore) &&
-                hasResults) {
-              return _SliverSearchResults(
-                  state: state, activePluginNotifier: activePluginNotifier);
-            }
-            if (state.searchStatus == SearchStatus.loaded &&
-                state.searchResults != null &&
-                state.searchResults!.items.isEmpty) {
-              return SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: SignBoardWidget(
+                        color: Default_Theme.accentColor2,
+                      ),
+                    ),
+                  );
+                }
+
+                if (hasOnline || hasLocal) {
+                  return _SliverSearchResults(
+                    state: state,
+                    activePluginNotifier: activePluginNotifier,
+                    localResults: localResults,
+                    filterNotifier: filterNotifier,
+                    onRetrySearch: onRetrySearch,
+                    isOffline: false,
+                  );
+                }
+
+                if (state.searchStatus == SearchStatus.loaded &&
+                    state.searchResults != null &&
+                    state.searchResults!.items.isEmpty &&
+                    !hasLocal) {
+                  return SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: SignBoardWidget(
                       message: AppLocalizations.of(context)!.searchNoResults,
-                      icon: MingCute.ghost_line));
-            }
-            if (state.searchStatus == SearchStatus.error) {
-              return SliverFillRemaining(
+                      icon: MingCute.ghost_line,
+                    ),
+                  );
+                }
+
+                if (state.searchStatus == SearchStatus.error && !hasLocal) {
+                  return SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SignBoardWidget(
+                            message: state.error ??
+                                AppLocalizations.of(context)!.searchFailed,
+                            icon: MingCute.sweats_line,
+                          ),
+                          const SizedBox(height: 16),
+                          ElevatedButton.icon(
+                            onPressed: onRetrySearch,
+                            icon: const Icon(MingCute.refresh_3_line,
+                                size: 16, color: Default_Theme.primaryColor1),
+                            label: const Text(
+                              'Retry Search',
+                              style: TextStyle(
+                                fontFamily: 'Gilroy',
+                                fontWeight: FontWeight.w600,
+                                color: Default_Theme.primaryColor1,
+                              ),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Default_Theme.surfaceElevated,
+                              foregroundColor: Default_Theme.primaryColor1,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 20, vertical: 12),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(20),
+                                side: const BorderSide(
+                                    color: Default_Theme.surfaceBorderSubtle),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+
+                return SliverFillRemaining(
                   hasScrollBody: false,
                   child: SignBoardWidget(
-                      message: state.error ??
-                          AppLocalizations.of(context)!.searchFailed,
-                      icon: MingCute.sweats_line));
-            }
-            return SliverFillRemaining(
-                hasScrollBody: false,
-                child: SignBoardWidget(
                     message: AppLocalizations.of(context)!.searchDiscover,
-                    icon: MingCute.planet_line));
+                    icon: MingCute.planet_line,
+                  ),
+                );
+              },
+            );
           },
         );
       },
@@ -1223,13 +1359,175 @@ class _ContentSliver extends StatelessWidget {
 class _SliverSearchResults extends StatelessWidget {
   final ContentState state;
   final ValueNotifier<String?> activePluginNotifier;
+  final ({List<Track> tracks, List<PlaylistItemProperties> playlists})
+      localResults;
+  final ValueNotifier<ContentSearchFilter> filterNotifier;
+  final VoidCallback onRetrySearch;
+  final bool isOffline;
 
-  const _SliverSearchResults(
-      {required this.state, required this.activePluginNotifier});
+  const _SliverSearchResults({
+    required this.state,
+    required this.activePluginNotifier,
+    required this.localResults,
+    required this.filterNotifier,
+    required this.onRetrySearch,
+    this.isOffline = false,
+  });
+
+  static Future<void> _openLibraryPlaylistItem(
+      BuildContext context, PlaylistItemProperties item) async {
+    if (item.type == PlaylistType.userPlaylist) {
+      context.pushNamed(
+        RoutePaths.playlistView,
+        extra: item.storageKey,
+      );
+      return;
+    }
+
+    final playlist = await context
+        .read<LibraryItemsCubit>()
+        .resolveLibraryItem(item.storageKey);
+    if (!context.mounted || playlist == null) return;
+
+    switch (playlist.type) {
+      case PlaylistType.artist:
+        if (playlist.artists == null || playlist.artists!.isEmpty) return;
+        final artist = playlist.artists!.first;
+        final pluginId = pluginIdOf(artist.id);
+        if (pluginId == null || pluginId.isEmpty) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ArtistView(artist: artist, pluginId: pluginId),
+          ),
+        );
+        return;
+      case PlaylistType.album:
+        if (playlist.album == null) return;
+        final album = playlist.album!;
+        final pluginId = pluginIdOf(album.id);
+        if (pluginId == null || pluginId.isEmpty) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AlbumView(album: album, pluginId: pluginId),
+          ),
+        );
+        return;
+      case PlaylistType.remotePlaylist:
+        if (playlist.remotePlaylist == null) return;
+        final remote = playlist.remotePlaylist!;
+        final pluginId = pluginIdOf(remote.id);
+        if (pluginId == null || pluginId.isEmpty) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) =>
+                OnlPlaylistView(playlist: remote, pluginId: pluginId),
+          ),
+        );
+        return;
+      case PlaylistType.userPlaylist:
+        return;
+    }
+  }
+
+  static Widget _buildLocalPlaylistTile(
+      BuildContext context, PlaylistItemProperties playlist) {
+    return InkWell(
+      onTap: () => _openLibraryPlaylistItem(context, playlist),
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: Default_Theme.surface.withValues(alpha: 0.45),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Default_Theme.surfaceBorderSubtle),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: Default_Theme.surfaceElevated,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: playlist.coverImgUrl != null
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: LoadImageCached(
+                        imageUrl: playlist.coverImgUrl!,
+                        fallbackUrl: playlist.coverImgUrl!,
+                        fit: BoxFit.cover,
+                      ),
+                    )
+                  : const Icon(
+                      MingCute.playlist_line,
+                      size: 22,
+                      color: Default_Theme.accentLavender,
+                    ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    playlist.playlistName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontFamily: 'Gilroy',
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w700,
+                      color: Default_Theme.primaryColor1,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    playlist.subTitle ?? 'Library Playlist',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontFamily: 'Gilroy',
+                      fontSize: 11.5,
+                      color: Default_Theme.primaryColor2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(
+              MingCute.right_line,
+              size: 16,
+              color: Default_Theme.primaryColor2,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    final items = state.searchResults!.items;
+    final filter = filterNotifier.value;
+    final showTracks = filter == ContentSearchFilter.all ||
+        filter == ContentSearchFilter.track;
+    final showAlbums = filter == ContentSearchFilter.all ||
+        filter == ContentSearchFilter.album;
+    final showArtists = filter == ContentSearchFilter.all ||
+        filter == ContentSearchFilter.artist;
+    final showPlaylists = filter == ContentSearchFilter.all ||
+        filter == ContentSearchFilter.playlist;
+
+    final localTracks = showTracks ? localResults.tracks : <Track>[];
+    final localPlaylists =
+        showPlaylists ? localResults.playlists : <PlaylistItemProperties>[];
+    final hasLocal = localTracks.isNotEmpty || localPlaylists.isNotEmpty;
+
+    final items = state.searchResults?.items ?? <MediaItem>[];
     final tracks = <Track>[];
     final albums = <AlbumSummary>[];
     final artists = <ArtistSummary>[];
@@ -1238,13 +1536,13 @@ class _SliverSearchResults extends StatelessWidget {
     for (final item in items) {
       switch (item) {
         case MediaItem_Track(:final field0):
-          tracks.add(field0);
+          if (showTracks) tracks.add(field0);
         case MediaItem_Album(:final field0):
-          albums.add(field0);
+          if (showAlbums) albums.add(field0);
         case MediaItem_Artist(:final field0):
-          artists.add(field0);
+          if (showArtists) artists.add(field0);
         case MediaItem_Playlist(:final field0):
-          playlists.add(field0);
+          if (showPlaylists) playlists.add(field0);
       }
     }
 
@@ -1254,6 +1552,40 @@ class _SliverSearchResults extends StatelessWidget {
 
     return SliverMainAxisGroup(
       slivers: [
+        if (isOffline)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Default_Theme.surfaceElevated,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Default_Theme.surfaceBorderSubtle),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(MingCute.wifi_off_line,
+                        size: 18, color: Default_Theme.accentLavender),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Offline Mode — Showing matching songs from your local library',
+                        style: TextStyle(
+                          fontFamily: 'Gilroy',
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w500,
+                          color: Default_Theme.primaryColor1
+                              .withValues(alpha: 0.85),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         if (isRefreshing)
           SliverToBoxAdapter(
             child: Padding(
@@ -1285,8 +1617,74 @@ class _SliverSearchResults extends StatelessWidget {
               ),
             ),
           ),
+        if (hasLocal) ...[
+          _sliverSectionHeader('From Your Library',
+              icon: MingCute.folder_star_line),
+          if (localTracks.isNotEmpty)
+            SliverPadding(
+              padding: const EdgeInsets.only(bottom: 8),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    final track = localTracks[index];
+                    final artistText =
+                        track.artists.map((a) => a.name).join(', ');
+                    final sub = artistText.isNotEmpty
+                        ? '$artistText • Library'
+                        : 'Library';
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 2),
+                      child: SongCardWidget(
+                        song: track,
+                        subtitleOverride: sub,
+                        onTap: () => context
+                            .read<TarangXPlayerCubit>()
+                            .tarangXPlayer
+                            .loadPlaylist(
+                              Playlist(
+                                tracks: localTracks,
+                                title:
+                                    'Library: ${state.searchQuery.isNotEmpty ? state.searchQuery : "Search"}',
+                              ),
+                              idx: index,
+                              doPlay: true,
+                            ),
+                        onOptionsTap: () => showMoreBottomSheet(
+                          context,
+                          track,
+                          showSinglePlay: true,
+                          showAddToQueue: true,
+                          showPlayNext: true,
+                        ),
+                      ),
+                    );
+                  },
+                  childCount: localTracks.length,
+                ),
+              ),
+            ),
+          if (localPlaylists.isNotEmpty)
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    final playlist = localPlaylists[index];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: _buildLocalPlaylistTile(context, playlist),
+                    );
+                  },
+                  childCount: localPlaylists.length,
+                ),
+              ),
+            ),
+        ],
         if (tracks.isNotEmpty) ...[
-          _sliverSectionHeader(AppLocalizations.of(context)!.searchTracks),
+          _sliverSectionHeader(hasLocal
+              ? 'Online Tracks'
+              : AppLocalizations.of(context)!.searchTracks),
           SliverPadding(
             padding: const EdgeInsets.only(bottom: 12),
             sliver: SliverList(
@@ -1294,16 +1692,28 @@ class _SliverSearchResults extends StatelessWidget {
                 (context, index) {
                   final track = tracks[index];
                   return Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 2),
                     child: SongCardWidget(
                       song: track,
                       onTap: () => context
                           .read<TarangXPlayerCubit>()
                           .tarangXPlayer
-                          .updateQueueTracks([track], doPlay: true),
-                      onOptionsTap: () => showMoreBottomSheet(context, track,
-                          showSinglePlay: true),
+                          .loadPlaylist(
+                            Playlist(
+                              tracks: tracks,
+                              title: 'Search: ${state.searchQuery}',
+                            ),
+                            idx: index,
+                            doPlay: true,
+                          ),
+                      onOptionsTap: () => showMoreBottomSheet(
+                        context,
+                        track,
+                        showSinglePlay: true,
+                        showAddToQueue: true,
+                        showPlayNext: true,
+                      ),
                     ),
                   );
                 },
@@ -1330,6 +1740,41 @@ class _SliverSearchResults extends StatelessWidget {
               .map((p) => PlaylistCard(playlist: p, pluginId: pluginId))
               .toList()),
         ],
+        if (state.searchStatus == SearchStatus.error && hasLocal)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Default_Theme.surfaceElevated,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Default_Theme.surfaceBorderSubtle),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(MingCute.alert_line,
+                        size: 18, color: Colors.orangeAccent),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'External search: ${state.error ?? "Failed to connect to provider"}',
+                        style: const TextStyle(
+                          fontFamily: 'Gilroy',
+                          fontSize: 12,
+                          color: Default_Theme.primaryColor2,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: onRetrySearch,
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         if (isLoadingMore)
           const SliverToBoxAdapter(
               child: Padding(
@@ -1343,16 +1788,25 @@ class _SliverSearchResults extends StatelessWidget {
     );
   }
 
-  Widget _sliverSectionHeader(String title) {
+  Widget _sliverSectionHeader(String title, {IconData? icon}) {
     return SliverToBoxAdapter(
       child: Padding(
-        padding: const EdgeInsets.only(left: 20, top: 20, bottom: 12),
-        child: Text(
-          title,
-          style: Default_Theme.secondoryTextStyleMedium.merge(TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-              color: Default_Theme.primaryColor1.withValues(alpha: 0.9))),
+        padding:
+            const EdgeInsets.only(left: 20, top: 20, bottom: 12, right: 20),
+        child: Row(
+          children: [
+            if (icon != null) ...[
+              Icon(icon, size: 18, color: Default_Theme.accentLavender),
+              const SizedBox(width: 8),
+            ],
+            Text(
+              title,
+              style: Default_Theme.secondoryTextStyleMedium.merge(TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: Default_Theme.primaryColor1.withValues(alpha: 0.9))),
+            ),
+          ],
         ),
       ),
     );
@@ -1378,11 +1832,13 @@ class _NebulaBackground extends StatelessWidget {
 
   List<Color> _getReactiveGradientColors(ContentState state) {
     if (state.searchStatus != SearchStatus.loaded &&
-        state.searchStatus != SearchStatus.loadingMore)
+        state.searchStatus != SearchStatus.loadingMore) {
       return [Colors.transparent, Colors.transparent];
+    }
     final items = state.searchResults?.items;
-    if (items == null || items.isEmpty)
+    if (items == null || items.isEmpty) {
       return [Colors.transparent, Colors.transparent];
+    }
 
     String seedString = "";
     final firstItem = items.first;

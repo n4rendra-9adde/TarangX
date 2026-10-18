@@ -36,6 +36,7 @@ class ServiceLocator {
   ServiceLocator._();
 
   static bool _initialized = false;
+  static bool get isInitialized => _initialized;
 
   // ── Plugin System Singletons ─────────────────────────────────────────────
 

@@ -25,12 +25,68 @@ import 'package:Bloomee/src/rust/api/plugin/commands.dart';
 /// to cancel in-flight requests when the user types a new query.
 class ContentBloc extends Bloc<ContentEvent, ContentState> {
   final PluginService _pluginService;
-  final PluginCacheRepository _cache = ServiceLocator.pluginCache;
+  final PluginCacheRepository? _customCache;
+  PluginCacheRepository? get _cache =>
+      _customCache ??
+      (ServiceLocator.isInitialized ? ServiceLocator.pluginCache : null);
+  int _searchVersion = 0;
+
+  static bool _isSafeHttpUrl(String? url) {
+    if (url == null || url.trim().isEmpty) return true;
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null) return false;
+    return uri.hasScheme && (uri.scheme == 'http' || uri.scheme == 'https');
+  }
+
+  static List<MediaItem> _sanitizeMediaItems(List<MediaItem> items) {
+    final sanitized = <MediaItem>[];
+    final seenTrackIds = <String>{};
+    final seenAlbumIds = <String>{};
+    final seenArtistIds = <String>{};
+    final seenPlaylistIds = <String>{};
+
+    for (final item in items) {
+      switch (item) {
+        case MediaItem_Track(:final field0):
+          final id = field0.id.trim();
+          final title = field0.title.trim();
+          if (id.isEmpty || title.isEmpty) continue;
+          if (!_isSafeHttpUrl(field0.url)) continue;
+          if (!_isSafeHttpUrl(field0.thumbnail.url)) continue;
+          if (!seenTrackIds.add(id)) continue;
+          sanitized.add(item);
+        case MediaItem_Album(:final field0):
+          final id = field0.id.trim();
+          final title = field0.title.trim();
+          if (id.isEmpty || title.isEmpty) continue;
+          if (!_isSafeHttpUrl(field0.thumbnail?.url)) continue;
+          if (!seenAlbumIds.add(id)) continue;
+          sanitized.add(item);
+        case MediaItem_Artist(:final field0):
+          final id = field0.id.trim();
+          final name = field0.name.trim();
+          if (id.isEmpty || name.isEmpty) continue;
+          if (!_isSafeHttpUrl(field0.thumbnail?.url)) continue;
+          if (!seenArtistIds.add(id)) continue;
+          sanitized.add(item);
+        case MediaItem_Playlist(:final field0):
+          final id = field0.id.trim();
+          final title = field0.title.trim();
+          if (id.isEmpty || title.isEmpty) continue;
+          if (!_isSafeHttpUrl(field0.thumbnail.url)) continue;
+          if (!seenPlaylistIds.add(id)) continue;
+          sanitized.add(item);
+      }
+    }
+    return sanitized;
+  }
 
   ContentBloc({
     required PluginService pluginService,
+    PluginCacheRepository? cache,
     String? initialPluginId,
   })  : _pluginService = pluginService,
+        _customCache = cache,
         super(ContentState(activePluginId: initialPluginId)) {
     on<SearchContent>(_onSearch, transformer: _debounceSearchTransformer());
     on<LoadMoreSearchContent>(_onLoadMoreSearch);
@@ -66,6 +122,7 @@ class ContentBloc extends Bloc<ContentEvent, ContentState> {
     SearchContent event,
     Emitter<ContentState> emit,
   ) async {
+    final currentVersion = ++_searchVersion;
     final pluginId = state.activePluginId;
     if (pluginId == null) {
       emit(state.copyWith(
@@ -105,12 +162,18 @@ class ContentBloc extends Bloc<ContentEvent, ContentState> {
         ),
       );
 
+      if (emit.isDone || currentVersion != _searchVersion) return;
+
       response.when(
         search: (results) {
+          final sanitized = _sanitizeMediaItems(results.items);
           emit(state.copyWith(
             searchStatus: SearchStatus.loaded,
             searchFilter: event.filter,
-            searchResults: results,
+            searchResults: PagedMediaItems(
+              items: sanitized,
+              nextPageToken: results.nextPageToken,
+            ),
           ));
         },
         // Handle unexpected response types gracefully.
@@ -136,8 +199,10 @@ class ContentBloc extends Bloc<ContentEvent, ContentState> {
         ack: () => _unexpectedResponse(emit, 'search'),
       );
     } on PluginException catch (e) {
+      if (emit.isDone || currentVersion != _searchVersion) return;
       _handlePluginError(emit, e, SearchStatus.error);
     } catch (e, stack) {
+      if (emit.isDone || currentVersion != _searchVersion) return;
       log('Search error', error: e, stackTrace: stack, name: 'ContentBloc');
       emit(state.copyWith(
         searchStatus: SearchStatus.error,
@@ -150,6 +215,7 @@ class ContentBloc extends Bloc<ContentEvent, ContentState> {
     LoadMoreSearchContent event,
     Emitter<ContentState> emit,
   ) async {
+    final currentVersion = _searchVersion;
     final pluginId = state.activePluginId;
     final currentResults = state.searchResults;
     final query = state.searchQuery.trim();
@@ -178,12 +244,15 @@ class ContentBloc extends Bloc<ContentEvent, ContentState> {
         ),
       );
 
+      if (emit.isDone || currentVersion != _searchVersion) return;
+
       response.when(
         search: (results) {
+          final combined = _sanitizeMediaItems([...currentResults.items, ...results.items]);
           emit(state.copyWith(
             searchStatus: SearchStatus.loaded,
             searchResults: PagedMediaItems(
-              items: [...currentResults.items, ...results.items],
+              items: combined,
               nextPageToken: results.nextPageToken,
             ),
           ));
@@ -704,8 +773,8 @@ class ContentBloc extends Bloc<ContentEvent, ContentState> {
     final cacheKey = 'home_sections::$pluginId';
     bool hasCache = false;
 
-    if (!event.bypassCache) {
-      final cached = await _cache.getCachedWithStaleness<List<Section>>(
+    if (!event.bypassCache && _cache != null) {
+      final cached = await _cache!.getCachedWithStaleness<List<Section>>(
         key: cacheKey,
         type: CacheType.sections,
         decode: decodeSectionsCacheAsync,
@@ -743,7 +812,7 @@ class ContentBloc extends Bloc<ContentEvent, ContentState> {
             homeSections: sections,
             activePluginId: pluginId,
           ));
-          _cache.put(
+          _cache?.put(
             key: cacheKey,
             value: sections,
             type: CacheType.sections,
@@ -937,6 +1006,7 @@ class ContentBloc extends Bloc<ContentEvent, ContentState> {
   // ── Clear ──────────────────────────────────────────────────────────────────
 
   void _onClearSearch(ClearSearch event, Emitter<ContentState> emit) {
+    ++_searchVersion;
     emit(state.copyWith(
       searchStatus: SearchStatus.initial,
       searchQuery: '',
