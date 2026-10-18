@@ -353,6 +353,18 @@ class QueueManager {
     }
   }
 
+  /// Removes upcoming tracks that match the given set of IDs,
+  /// strictly preserving the currently playing track and all past tracks.
+  void removeUpcomingTracks(Set<String> trackIdsToRemove) {
+    if (_queue.value.isEmpty || _currentIndex >= _queue.value.length - 1) return;
+    final currentList = List<Track>.from(_queue.value);
+    final pastAndCurrent = currentList.sublist(0, _currentIndex + 1);
+    final upcoming = currentList.sublist(_currentIndex + 1);
+    final filteredUpcoming =
+        upcoming.where((t) => !trackIdsToRemove.contains(t.id)).toList();
+    _queue.add([...pastAndCurrent, ...filteredUpcoming]);
+  }
+
   /// Move a track from one position to another.
   void moveTrack(int oldIndex, int newIndex) {
     final queue = List<Track>.from(_queue.value);

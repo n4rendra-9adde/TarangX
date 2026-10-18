@@ -25,6 +25,7 @@ import 'package:Bloomee/screens/widgets/snackbar.dart';
 import 'package:Bloomee/screens/widgets/up_next_panel.dart';
 import 'package:Bloomee/screens/widgets/volume_slider.dart';
 import 'package:Bloomee/services/player/player_engine.dart';
+import 'package:Bloomee/services/recommendation/models/recommendation_models.dart';
 import 'package:Bloomee/services/tarangx_player.dart';
 import 'package:Bloomee/utils/load_image.dart';
 import 'package:Bloomee/utils/pallete_generator.dart';
@@ -1365,6 +1366,111 @@ class _SongInfoRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  StreamBuilder<bool>(
+                    stream: player.isRadioActiveStream,
+                    builder: (context, radioSnap) {
+                      if (radioSnap.data != true) return const SizedBox.shrink();
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: StreamBuilder<RadioSeed?>(
+                          stream: player.activeRadioSeedStream,
+                          builder: (context, seedSnap) {
+                            final seed = seedSnap.data;
+                            final seedLabel = seed != null
+                                ? 'Radio • ${seed.title}'
+                                : 'Infinite Radio';
+                            return Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    gradient: Default_Theme.brandGradient,
+                                    borderRadius: BorderRadius.circular(12),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Default_Theme.accentGlow
+                                            .withValues(alpha: 0.35),
+                                        blurRadius: 8,
+                                        offset: const Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(MingCute.radio_line,
+                                          size: 12, color: Colors.white),
+                                      const SizedBox(width: 4),
+                                      ConstrainedBox(
+                                        constraints:
+                                            const BoxConstraints(maxWidth: 160),
+                                        child: Text(
+                                          seedLabel,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontFamily: 'Gilroy',
+                                            fontSize: 10.5,
+                                            fontWeight: FontWeight.w700,
+                                            color: Colors.white,
+                                            letterSpacing: 0.2,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                GestureDetector(
+                                  onTap: () {
+                                    HapticFeedback.lightImpact();
+                                    player.stopRadio();
+                                    SnackbarService.showMessage(
+                                        'Infinite Radio turned off');
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 6, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color:
+                                          Colors.white.withValues(alpha: 0.08),
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(
+                                        color: Colors.white
+                                            .withValues(alpha: 0.12),
+                                        width: 0.6,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(Icons.close_rounded,
+                                            size: 10,
+                                            color: Default_Theme.primaryColor2),
+                                        const SizedBox(width: 2),
+                                        Text(
+                                          'Stop',
+                                          style: TextStyle(
+                                            fontFamily: 'Gilroy',
+                                            fontSize: 9.5,
+                                            fontWeight: FontWeight.w600,
+                                            color: Default_Theme.primaryColor2
+                                                .withValues(alpha: 0.9),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                      );
+                    },
+                  ),
                   Text(
                     currentTrack.title,
                     maxLines: 1,

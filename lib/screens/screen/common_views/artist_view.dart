@@ -299,6 +299,7 @@ class _ArtistViewState extends State<ArtistView> {
                   description: _cleanText(details?.description),
                   pluginId: widget.pluginId,
                   artistId: artistSummary.id,
+                  artistSummary: artistSummary,
                   topTracks: topTracks,
                   isSaved: _isSaved,
                   url: artistSummary.url,
@@ -472,6 +473,7 @@ class _ArtistHeaderContent extends StatelessWidget {
   final String? description;
   final String pluginId;
   final String artistId;
+  final ArtistSummary artistSummary;
   final List<Track> topTracks;
   final bool isSaved;
   final String? url;
@@ -487,6 +489,7 @@ class _ArtistHeaderContent extends StatelessWidget {
     this.description,
     required this.pluginId,
     required this.artistId,
+    required this.artistSummary,
     required this.topTracks,
     required this.isSaved,
     this.url,
@@ -678,6 +681,20 @@ class _ArtistHeaderContent extends StatelessWidget {
           isActive: isSaved,
           tooltip: isSaved ? 'Remove from Library' : 'Save to Library',
           onTap: onToggleSave,
+        ),
+        _PremiumCircularButton(
+          icon: MingCute.radio_line,
+          color: Default_Theme.primaryColor1,
+          isActive: false,
+          tooltip: 'Start Artist Radio',
+          onTap: () {
+            SnackbarService.showMessage('Starting Infinite Radio for $title');
+            context.read<TarangXPlayerCubit>().tarangXPlayer.startRadioFromArtist(
+                  artistSummary,
+                  topTracks: topTracks,
+                  playImmediately: true,
+                );
+          },
         ),
         if (url != null)
           _PremiumCircularButton(

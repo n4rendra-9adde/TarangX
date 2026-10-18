@@ -205,6 +205,18 @@ class _TrackOptionsBottomSheet extends StatelessWidget {
                             const SizedBox(height: 8),
                           ],
                           _CompactTile(
+                            icon: MingCute.radio_line,
+                            title: 'Start Radio',
+                            onTap: (ctx) {
+                              final player =
+                                  ctx.read<TarangXPlayerCubit>().tarangXPlayer;
+                              Navigator.pop(ctx);
+                              player.startRadioFromTrack(song);
+                              SnackbarService.showMessage(
+                                  'Starting Infinite Radio from "${song.title}"');
+                            },
+                          ),
+                          _CompactTile(
                             icon: MingCute.heart_line,
                             title: l10n.playerAddToFavorites,
                             onTap: (ctx) {

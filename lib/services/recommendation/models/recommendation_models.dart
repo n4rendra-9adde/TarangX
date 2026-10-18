@@ -92,8 +92,67 @@ class RecommendationReason {
     );
   }
 
+  factory RecommendationReason.infiniteRadio(String seedTitle) {
+    return RecommendationReason(
+      type: RecommendationReasonType.contentSimilarity,
+      description: 'Infinite Radio • Based on "$seedTitle"',
+      sourceContext: seedTitle,
+    );
+  }
+
   @override
   String toString() => 'RecommendationReason(type: $type, description: $description)';
+}
+
+/// The origin seed that initiated an Infinite Radio session.
+enum RadioSeedType { track, artist }
+
+class RadioSeed {
+  final RadioSeedType type;
+  final String id;
+  final String title;
+  final String? subtitle;
+  final Artwork? thumbnail;
+
+  const RadioSeed({
+    required this.type,
+    required this.id,
+    required this.title,
+    this.subtitle,
+    this.thumbnail,
+  });
+
+  factory RadioSeed.fromTrack(Track track) => RadioSeed(
+        type: RadioSeedType.track,
+        id: track.id,
+        title: track.title,
+        subtitle: track.artists.map((a) => a.name).join(', '),
+        thumbnail: track.thumbnail,
+      );
+
+  factory RadioSeed.fromArtist(ArtistSummary artist) => RadioSeed(
+        type: RadioSeedType.artist,
+        id: artist.id,
+        title: artist.name,
+        subtitle: 'Artist Radio',
+        thumbnail: artist.thumbnail,
+      );
+
+  @override
+  String toString() => 'RadioSeed($type: "$title")';
+}
+
+/// Result of an Infinite Radio batch replenishment.
+class RadioBatchResult {
+  final List<ScoredTrack> tracks;
+  final String? nextPageToken;
+  final bool isExhausted;
+
+  const RadioBatchResult({
+    required this.tracks,
+    this.nextPageToken,
+    this.isExhausted = false,
+  });
 }
 
 /// A track paired with its computed score and explainability metadata.

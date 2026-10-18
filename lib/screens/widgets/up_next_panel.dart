@@ -10,6 +10,8 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'song_tile.dart';
 import 'more_bottom_sheet.dart';
+import 'package:icons_plus/icons_plus.dart';
+import 'package:Bloomee/services/recommendation/models/recommendation_models.dart';
 
 class _UpNextStyles {
   static final headerTextStyle = Default_Theme.secondoryTextStyleMedium.merge(
@@ -344,12 +346,81 @@ class _QueueInfoRow extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          StreamBuilder<List<MediaItem>>(
-            stream: playerCubit.tarangXPlayer.queue,
-            builder: (context, snapshot) {
-              return Text(l10n.upNextItemsInQueue(snapshot.data?.length ?? 0),
-                  style: _UpNextStyles.queueCountStyle);
-            },
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              StreamBuilder<List<MediaItem>>(
+                stream: playerCubit.tarangXPlayer.queue,
+                builder: (context, snapshot) {
+                  return Text(
+                    l10n.upNextItemsInQueue(snapshot.data?.length ?? 0),
+                    style: _UpNextStyles.queueCountStyle,
+                  );
+                },
+              ),
+              const SizedBox(width: 10),
+              StreamBuilder<bool>(
+                stream: playerCubit.tarangXPlayer.isRadioActiveStream,
+                builder: (context, radioSnap) {
+                  if (radioSnap.data != true) return const SizedBox.shrink();
+                  return StreamBuilder<RadioSeed?>(
+                    stream: playerCubit.tarangXPlayer.activeRadioSeedStream,
+                    builder: (context, seedSnap) {
+                      final seed = seedSnap.data;
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          gradient: Default_Theme.brandGradient,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Default_Theme.accentGlow
+                                  .withValues(alpha: 0.35),
+                              blurRadius: 6,
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(MingCute.radio_line,
+                                size: 11, color: Colors.white),
+                            const SizedBox(width: 4),
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 110),
+                              child: Text(
+                                seed?.title ?? 'Radio',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontFamily: 'Gilroy',
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            GestureDetector(
+                              onTap: () {
+                                playerCubit.tarangXPlayer
+                                    .stopRadio(clearUpcoming: true);
+                              },
+                              child: const Icon(
+                                Icons.close_rounded,
+                                size: 12,
+                                color: Colors.white70,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ],
           ),
           _ClearQueueButton(playerCubit: playerCubit),
         ],
@@ -625,6 +696,7 @@ class _QueueItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final songModel = mediaItemToTrack(mediaItem);
+    final isRadio = playerCubit.tarangXPlayer.isRadioTrack(songModel.id);
 
     Widget content = Dismissible(
       key: ValueKey('dismiss_${mediaItem.id}'),
@@ -648,24 +720,66 @@ class _QueueItem extends StatelessWidget {
                   showOptions: false,
                   onTap: () => playerCubit.tarangXPlayer.skipToQueueItem(index),
                   song: songModel,
-                  trailing: IconButton(
-                    tooltip: 'More options',
-                    iconSize: 20,
-                    splashRadius: 18,
-                    padding: const EdgeInsets.all(6),
-                    constraints: const BoxConstraints(
-                      minWidth: 36,
-                      minHeight: 36,
-                    ),
-                    color: Default_Theme.primaryColor2.withValues(alpha: 0.65),
-                    icon: const Icon(Icons.more_horiz_rounded),
-                    onPressed: () => showMoreBottomSheet(
-                      context,
-                      songModel,
-                      showAddToQueue: false,
-                      showPlayNext: false,
-                      showSinglePlay: true,
-                    ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (isRadio)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Default_Theme.accentColor2
+                                  .withValues(alpha: 0.16),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: Default_Theme.accentColor2
+                                    .withValues(alpha: 0.4),
+                                width: 0.6,
+                              ),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(MingCute.radio_line,
+                                    size: 10,
+                                    color: Default_Theme.accentLavender),
+                                SizedBox(width: 3),
+                                Text(
+                                  'Radio',
+                                  style: TextStyle(
+                                    fontFamily: 'Gilroy',
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    color: Default_Theme.accentLavender,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      IconButton(
+                        tooltip: 'More options',
+                        iconSize: 20,
+                        splashRadius: 18,
+                        padding: const EdgeInsets.all(6),
+                        constraints: const BoxConstraints(
+                          minWidth: 36,
+                          minHeight: 36,
+                        ),
+                        color:
+                            Default_Theme.primaryColor2.withValues(alpha: 0.65),
+                        icon: const Icon(Icons.more_horiz_rounded),
+                        onPressed: () => showMoreBottomSheet(
+                          context,
+                          songModel,
+                          showAddToQueue: false,
+                          showPlayNext: false,
+                          showSinglePlay: true,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),

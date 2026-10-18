@@ -164,6 +164,129 @@ class HybridRecommendationEngine {
         .toList();
   }
 
+  /// Generates a paginated batch of tracks for an Infinite Radio session
+  /// based on a song or artist seed.
+  Future<RadioBatchResult> getRadioTracksForSeed({
+    required RadioSeed seed,
+    int limit = 10,
+    String? pageToken,
+    Set<String> excludedTrackIds = const {},
+  }) async {
+    final profile = _signalCollector.currentProfile;
+    final userLanguages = await _getUserMusicLanguages();
+    final candidates = <Track>[];
+    String? nextPageToken;
+
+    if (seed.type == RadioSeedType.track) {
+      final parts = tryParseMediaId(seed.id);
+      if (parts != null && parts.pluginId != kLocalPluginId) {
+        try {
+          final response = await _pluginService.execute(
+            pluginId: parts.pluginId,
+            request: PluginRequest.contentResolver(
+              ContentResolverCommand.getRadioTracks(
+                id: parts.localId,
+                pageToken: pageToken,
+              ),
+            ),
+          );
+          response.whenOrNull(
+            moreTracks: (paged) {
+              candidates.addAll(paged.items);
+              nextPageToken = paged.nextPageToken;
+            },
+          );
+        } catch (e) {
+          log('Plugin radio tracks error for seed ${seed.title}: $e',
+              name: 'HybridRecommendationEngine');
+        }
+      }
+    } else {
+      // Artist seed: fetch artist details to extract top tracks as radio candidates
+      final parts = tryParseMediaId(seed.id);
+      if (parts != null && parts.pluginId != kLocalPluginId) {
+        try {
+          final response = await _pluginService.execute(
+            pluginId: parts.pluginId,
+            request: PluginRequest.contentResolver(
+              ContentResolverCommand.getArtistDetails(id: parts.localId),
+            ),
+          );
+          response.whenOrNull(
+            artistDetails: (details) {
+              candidates.addAll(details.topTracks);
+            },
+          );
+        } catch (_) {}
+      }
+    }
+
+    // If online results are scarce or unavailable, supplement from local library and history
+    if (candidates.length < limit) {
+      try {
+        final likedPlaylist =
+            await _playlistDao.loadPlaylist(PlaylistDAO.likedPlaylist);
+        candidates.addAll(likedPlaylist.tracks);
+        final history = await _historyDao.getHistory(limit: 40);
+        candidates.addAll(history);
+        final downloads = await _downloadDao.getValidDownloadedTracks();
+        candidates.addAll(downloads);
+        final curated = _getCuratedLanguageCandidates(userLanguages);
+        candidates.addAll(curated);
+      } catch (_) {}
+    }
+
+    // Filter exclusions, dislikes, seed itself, and already-queued session IDs
+    final cleanCandidates = _filterCandidates(candidates, profile).where((t) {
+      if (t.id == seed.id) return false;
+      if (excludedTrackIds.contains(t.id)) return false;
+      return true;
+    }).toList();
+
+    final scored = cleanCandidates.map((c) {
+      double simScore;
+      if (seed.type == RadioSeedType.track) {
+        simScore = c.artists.any((a) =>
+                seed.subtitle?.toLowerCase().contains(a.name.toLowerCase().trim()) ?? false)
+            ? 0.85
+            : 0.40;
+      } else {
+        simScore = c.artists.any((a) =>
+                a.name.toLowerCase().trim() == seed.title.toLowerCase().trim())
+            ? 0.95
+            : 0.35;
+      }
+
+      final prefScore = _calculatePreferenceScore(c, profile, userLanguages);
+      final recScore = _calculateRecencyScore(c, profile);
+      final repPenalty = _calculateRepetitionPenalty(c, profile);
+
+      final finalScore =
+          (simScore * 0.50) + (prefScore * 0.35) + (recScore * 0.15) - repPenalty;
+
+      return ScoredTrack(
+        track: c,
+        score: finalScore.clamp(0.01, 1.0),
+        reason: RecommendationReason.infiniteRadio(seed.title),
+        subScores: {'similarity': simScore, 'preference': prefScore},
+      );
+    }).toList();
+
+    scored.sort((a, b) => b.score.compareTo(a.score));
+    final diversified = _applyDiversityAndDeduplication(scored,
+        maxPerArtist: _config.maxTracksPerArtist, limit: limit);
+
+    final finalTracks = diversified
+        .where((st) => !isTrackExcluded(st.track, profile) && st.score > 0.0)
+        .toList();
+
+    return RadioBatchResult(
+      tracks: finalTracks,
+      nextPageToken: nextPageToken,
+      isExhausted: nextPageToken == null && finalTracks.isEmpty,
+    );
+  }
+
   /// Evaluates whether a track is explicitly excluded (disliked track ID or blocked artist).
   /// Exclusions are case-insensitive and take absolute precedence over positive preferences.
   bool isTrackExcluded(Track track, UserTasteProfile profile) {

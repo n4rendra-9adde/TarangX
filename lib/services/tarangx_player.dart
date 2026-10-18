@@ -26,6 +26,7 @@ import 'package:Bloomee/services/player/recently_played_tracker.dart';
 import 'package:Bloomee/services/plugin/plugin_service.dart';
 import 'package:Bloomee/services/meta_resolver/smart_track_replacement_service.dart';
 import 'package:Bloomee/services/discord_service.dart';
+import 'package:Bloomee/services/recommendation/models/recommendation_models.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:async/async.dart';
@@ -117,6 +118,22 @@ class TarangXMusicPlayer extends BaseAudioHandler
   BehaviorSubject<PlayerError?> get lastError => _errorHandler.lastError;
   BehaviorSubject<List<Track>> get relatedSongs =>
       _relatedSongsManager.relatedSongs;
+
+  // Infinite Radio accessors & reactive streams
+  BehaviorSubject<bool> get isRadioActiveSubject => _relatedSongsManager.isRadioActive;
+  bool get isRadioActive => _relatedSongsManager.isRadioActive.value;
+  Stream<bool> get isRadioActiveStream => _relatedSongsManager.isRadioActive.stream;
+
+  BehaviorSubject<RadioSeed?> get activeRadioSeedSubject => _relatedSongsManager.activeRadioSeed;
+  RadioSeed? get activeRadioSeed => _relatedSongsManager.activeRadioSeed.value;
+  Stream<RadioSeed?> get activeRadioSeedStream => _relatedSongsManager.activeRadioSeed.stream;
+
+  BehaviorSubject<bool> get isGeneratingRadioSubject => _relatedSongsManager.isGeneratingRadio;
+  bool get isGeneratingRadio => _relatedSongsManager.isGeneratingRadio.value;
+  Stream<bool> get isGeneratingRadioStream => _relatedSongsManager.isGeneratingRadio.stream;
+
+  bool isRadioTrack(String trackId) => _relatedSongsManager.isRadioTrack(trackId);
+  RecommendationReason? getRadioReason(String trackId) => _relatedSongsManager.getReason(trackId);
 
   @override
   BehaviorSubject<String> get queueTitle => _queueManager.queueTitle;
@@ -362,7 +379,8 @@ class TarangXMusicPlayer extends BaseAudioHandler
     };
 
     _relatedSongsManager.onAddQueueItems =
-        (items, {bool atLast = false}) => addQueueTracks(items, atLast: atLast);
+        (items, {bool atLast = false}) =>
+            _queueManager.addTracks(items, atLast: atLast);
 
     _recentlyPlayedTracker = RecentlyPlayedTracker(
       engine,
@@ -1068,6 +1086,7 @@ class TarangXMusicPlayer extends BaseAudioHandler
     _isAdvancing = true;
     try {
       fromPlaylist.add(true);
+      _relatedSongsManager.stopRadio();
       _relatedSongsManager.clearRelatedSongs();
       _clearPreloadedMarker();
 
@@ -1107,22 +1126,153 @@ class TarangXMusicPlayer extends BaseAudioHandler
     }
   }
 
-  @override
-  Future<void> addQueueItem(MediaItem mediaItem) async =>
-      _queueManager.addTrack(mediaItemToTrack(mediaItem));
+  // ─── Infinite Radio Operations ───────────────────────────────────────────
 
-  Future<void> addQueueTrack(Track track) async =>
-      _queueManager.addTrack(track);
+  /// Starts an Infinite Radio session seeded by [track].
+  ///
+  /// If [track] is already the currently playing track, playback continues seamlessly
+  /// while radio tracks are generated and appended to the queue buffer.
+  Future<void> startRadioFromTrack(Track track, {bool playImmediately = true}) async {
+    _errorHandler.resetCircuitBreaker();
+    _shouldResumeAfterInterruption = false;
+
+    final isAlreadyCurrent = _queueManager.currentTrack?.id == track.id;
+
+    if (isAlreadyCurrent && engine.playing) {
+      queueTitle.add('Radio: ${track.title}');
+      final initialTracks = await _relatedSongsManager.startRadio(
+        seed: RadioSeed.fromTrack(track),
+        currentTrack: track,
+        playImmediately: playImmediately,
+      );
+      if (initialTracks.isNotEmpty) {
+        _queueManager.addTracks(initialTracks, atLast: true);
+      }
+    } else {
+      _isAdvancing = true;
+      try {
+        fromPlaylist.add(false);
+        _clearPreloadedMarker();
+        _queueManager.loadTracks([track], playlistName: 'Radio: ${track.title}', idx: 0);
+        queueTitle.add('Radio: ${track.title}');
+        if (playImmediately) {
+          await _enqueuePlayTrack(track, doPlay: true);
+        } else {
+          _updateCurrentTrack(track);
+        }
+        final initialTracks = await _relatedSongsManager.startRadio(
+          seed: RadioSeed.fromTrack(track),
+          currentTrack: track,
+          playImmediately: playImmediately,
+        );
+        if (initialTracks.isNotEmpty) {
+          _queueManager.addTracks(initialTracks, atLast: true);
+        }
+      } finally {
+        _isAdvancing = false;
+      }
+    }
+  }
+
+  /// Starts an Infinite Radio session seeded by [artist].
+  ///
+  /// Plays [topTracks] first if provided, then generates continuous recommendations.
+  Future<void> startRadioFromArtist(ArtistSummary artist,
+      {List<Track>? topTracks, bool playImmediately = true}) async {
+    _errorHandler.resetCircuitBreaker();
+    _shouldResumeAfterInterruption = false;
+    _isAdvancing = true;
+    try {
+      fromPlaylist.add(false);
+      _clearPreloadedMarker();
+
+      Track? initialTrack;
+      if (topTracks != null && topTracks.isNotEmpty) {
+        initialTrack = topTracks.first;
+      }
+
+      if (initialTrack != null) {
+        _queueManager.loadTracks([initialTrack], playlistName: 'Radio: ${artist.name}', idx: 0);
+        queueTitle.add('Radio: ${artist.name}');
+        if (playImmediately) {
+          await _enqueuePlayTrack(initialTrack, doPlay: true);
+        } else {
+          _updateCurrentTrack(initialTrack);
+        }
+      } else {
+        queueTitle.add('Radio: ${artist.name}');
+      }
+
+      final initialTracks = await _relatedSongsManager.startRadio(
+        seed: RadioSeed.fromArtist(artist),
+        currentTrack: initialTrack ?? _queueManager.currentTrack,
+        playImmediately: playImmediately,
+      );
+
+      if (initialTracks.isNotEmpty) {
+        if (initialTrack == null) {
+          final first = initialTracks.first;
+          final rest = initialTracks.sublist(1);
+          _queueManager.loadTracks([first, ...rest], playlistName: 'Radio: ${artist.name}', idx: 0);
+          if (playImmediately) {
+            await _enqueuePlayTrack(first, doPlay: true);
+          } else {
+            _updateCurrentTrack(first);
+          }
+        } else {
+          _queueManager.addTracks(initialTracks, atLast: true);
+        }
+      }
+    } finally {
+      _isAdvancing = false;
+    }
+  }
+
+  /// Stops Infinite Radio mode.
+  ///
+  /// If [clearUpcoming] is true, only upcoming auto-generated radio tracks
+  /// are removed, preserving manually queued tracks.
+  void stopRadio({bool clearUpcoming = false}) {
+    _relatedSongsManager.stopRadio(
+      clearUpcoming: clearUpcoming,
+      queueManager: _queueManager,
+    );
+    if (queueTitle.value.startsWith('Radio: ')) {
+      queueTitle.add('Queue');
+    }
+  }
+
+  // ─── Queue Additions & Manual Track Tagging ───────────────────────────────
+
+  @override
+  Future<void> addQueueItem(MediaItem mediaItem) async {
+    final t = mediaItemToTrack(mediaItem);
+    _relatedSongsManager.markManualTrack(t.id);
+    return _queueManager.addTrack(t);
+  }
+
+  Future<void> addQueueTrack(Track track) async {
+    _relatedSongsManager.markManualTrack(track.id);
+    return _queueManager.addTrack(track);
+  }
 
   @override
   Future<void> addQueueItems(List<MediaItem> mediaItems,
-          {String queueName = 'Queue', bool atLast = false}) async =>
-      _queueManager.addTracks(mediaItems.map(mediaItemToTrack).toList(),
-          atLast: atLast);
+      {String queueName = 'Queue', bool atLast = false}) async {
+    final tracks = mediaItems.map(mediaItemToTrack).toList();
+    for (final t in tracks) {
+      _relatedSongsManager.markManualTrack(t.id);
+    }
+    return _queueManager.addTracks(tracks, atLast: atLast);
+  }
 
   Future<void> addQueueTracks(List<Track> tracks,
-          {bool atLast = false}) async =>
-      _queueManager.addTracks(tracks, atLast: atLast);
+      {bool atLast = false}) async {
+    for (final t in tracks) {
+      _relatedSongsManager.markManualTrack(t.id);
+    }
+    return _queueManager.addTracks(tracks, atLast: atLast);
+  }
 
   Future<void> updateQueueTracks(List<Track> tracks,
       {bool doPlay = false, int startIndex = 0}) async {
@@ -1133,15 +1283,23 @@ class TarangXMusicPlayer extends BaseAudioHandler
     }
   }
 
-  Future<void> addPlayNextItem(MediaItem item) async =>
-      _queueManager.addPlayNext(mediaItemToTrack(item));
+  Future<void> addPlayNextItem(MediaItem item) async {
+    final t = mediaItemToTrack(item);
+    _relatedSongsManager.markManualTrack(t.id);
+    return _queueManager.addPlayNext(t);
+  }
 
-  Future<void> addPlayNextTrack(Track track) async =>
-      _queueManager.addPlayNext(track);
+  Future<void> addPlayNextTrack(Track track) async {
+    _relatedSongsManager.markManualTrack(track.id);
+    return _queueManager.addPlayNext(track);
+  }
 
   @override
-  Future<void> insertQueueItem(int index, MediaItem mediaItem) async =>
-      _queueManager.insertTrack(index, mediaItemToTrack(mediaItem));
+  Future<void> insertQueueItem(int index, MediaItem mediaItem) async {
+    final t = mediaItemToTrack(mediaItem);
+    _relatedSongsManager.markManualTrack(t.id);
+    return _queueManager.insertTrack(index, t);
+  }
 
   @override
   Future<void> removeQueueItemAt(int index) async =>
