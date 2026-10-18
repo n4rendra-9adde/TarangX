@@ -33,17 +33,37 @@ class ContentBloc extends Bloc<ContentEvent, ContentState> {
 
   static bool _isSafeHttpUrl(String? url) {
     if (url == null || url.trim().isEmpty) return true;
-    final uri = Uri.tryParse(url.trim());
+    final trimmed = url.trim();
+    final uri = Uri.tryParse(trimmed);
     if (uri == null) return false;
-    return uri.hasScheme && (uri.scheme == 'http' || uri.scheme == 'https');
+    return uri.hasScheme &&
+        (uri.scheme == 'http' || uri.scheme == 'https') &&
+        uri.host.isNotEmpty;
   }
 
-  static List<MediaItem> _sanitizeMediaItems(List<MediaItem> items) {
+  static bool _isArtworkSafe(Artwork? artwork) {
+    if (artwork == null) return true;
+    return _isSafeHttpUrl(artwork.url) &&
+        _isSafeHttpUrl(artwork.urlLow) &&
+        _isSafeHttpUrl(artwork.urlHigh);
+  }
+
+  static String _buildCompositeKey({
+    required String rawId,
+    required String type,
+    String? activePluginId,
+  }) {
+    final provider = pluginIdOf(rawId) ?? activePluginId ?? '';
+    final stableId = localIdOf(rawId) ?? rawId;
+    return '$provider:$type:$stableId';
+  }
+
+  static List<MediaItem> _sanitizeMediaItems(
+    List<MediaItem> items, {
+    String? activePluginId,
+  }) {
     final sanitized = <MediaItem>[];
-    final seenTrackIds = <String>{};
-    final seenAlbumIds = <String>{};
-    final seenArtistIds = <String>{};
-    final seenPlaylistIds = <String>{};
+    final seenKeys = <String>{};
 
     for (final item in items) {
       switch (item) {
@@ -52,29 +72,51 @@ class ContentBloc extends Bloc<ContentEvent, ContentState> {
           final title = field0.title.trim();
           if (id.isEmpty || title.isEmpty) continue;
           if (!_isSafeHttpUrl(field0.url)) continue;
-          if (!_isSafeHttpUrl(field0.thumbnail.url)) continue;
-          if (!seenTrackIds.add(id)) continue;
+          if (!_isArtworkSafe(field0.thumbnail)) continue;
+          final key = _buildCompositeKey(
+            rawId: id,
+            type: 'track',
+            activePluginId: activePluginId,
+          );
+          if (!seenKeys.add(key)) continue;
           sanitized.add(item);
         case MediaItem_Album(:final field0):
           final id = field0.id.trim();
           final title = field0.title.trim();
           if (id.isEmpty || title.isEmpty) continue;
-          if (!_isSafeHttpUrl(field0.thumbnail?.url)) continue;
-          if (!seenAlbumIds.add(id)) continue;
+          if (!_isSafeHttpUrl(field0.url)) continue;
+          if (!_isArtworkSafe(field0.thumbnail)) continue;
+          final key = _buildCompositeKey(
+            rawId: id,
+            type: 'album',
+            activePluginId: activePluginId,
+          );
+          if (!seenKeys.add(key)) continue;
           sanitized.add(item);
         case MediaItem_Artist(:final field0):
           final id = field0.id.trim();
           final name = field0.name.trim();
           if (id.isEmpty || name.isEmpty) continue;
-          if (!_isSafeHttpUrl(field0.thumbnail?.url)) continue;
-          if (!seenArtistIds.add(id)) continue;
+          if (!_isSafeHttpUrl(field0.url)) continue;
+          if (!_isArtworkSafe(field0.thumbnail)) continue;
+          final key = _buildCompositeKey(
+            rawId: id,
+            type: 'artist',
+            activePluginId: activePluginId,
+          );
+          if (!seenKeys.add(key)) continue;
           sanitized.add(item);
         case MediaItem_Playlist(:final field0):
           final id = field0.id.trim();
           final title = field0.title.trim();
           if (id.isEmpty || title.isEmpty) continue;
-          if (!_isSafeHttpUrl(field0.thumbnail.url)) continue;
-          if (!seenPlaylistIds.add(id)) continue;
+          if (!_isArtworkSafe(field0.thumbnail)) continue;
+          final key = _buildCompositeKey(
+            rawId: id,
+            type: 'playlist',
+            activePluginId: activePluginId,
+          );
+          if (!seenKeys.add(key)) continue;
           sanitized.add(item);
       }
     }
@@ -166,7 +208,10 @@ class ContentBloc extends Bloc<ContentEvent, ContentState> {
 
       response.when(
         search: (results) {
-          final sanitized = _sanitizeMediaItems(results.items);
+          final sanitized = _sanitizeMediaItems(
+            results.items,
+            activePluginId: pluginId,
+          );
           emit(state.copyWith(
             searchStatus: SearchStatus.loaded,
             searchFilter: event.filter,
@@ -248,7 +293,10 @@ class ContentBloc extends Bloc<ContentEvent, ContentState> {
 
       response.when(
         search: (results) {
-          final combined = _sanitizeMediaItems([...currentResults.items, ...results.items]);
+          final combined = _sanitizeMediaItems(
+            [...currentResults.items, ...results.items],
+            activePluginId: pluginId,
+          );
           emit(state.copyWith(
             searchStatus: SearchStatus.loaded,
             searchResults: PagedMediaItems(

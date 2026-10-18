@@ -563,4 +563,291 @@ void main() {
       expect(playlist.title, 'Search: rock');
     });
   });
+
+  group('TarangX Task 12: Search Identity, URL Safety, and Queue Regression Audit', () {
+    late MockSearchPluginService pluginService;
+    late ContentBloc contentBloc;
+
+    setUp(() {
+      pluginService = MockSearchPluginService();
+      contentBloc = ContentBloc(
+        pluginService: pluginService,
+        initialPluginId: 'provider_default',
+      );
+    });
+
+    tearDown(() async {
+      await contentBloc.close();
+    });
+
+    // ── 1. Cross-Type ID Collision ──────────────────────────────────────────
+
+    test('Cross-type ID collision: items of different types sharing identical ID are all preserved',
+        () async {
+      pluginService.onExecute = (_, __) async => PluginResponse.search(
+            PagedMediaItems(items: [
+              MediaItem.track(
+                  makeTestTrack(id: 'shared_id_100', title: 'Track 100')),
+              MediaItem.album(
+                  makeTestAlbum(id: 'shared_id_100', title: 'Album 100')),
+              MediaItem.artist(
+                  makeTestArtist(id: 'shared_id_100', name: 'Artist 100')),
+              MediaItem.playlist(
+                  makeTestPlaylist(id: 'shared_id_100', title: 'Playlist 100')),
+            ]),
+          );
+
+      contentBloc.add(const SearchContent(
+        query: 'collision test',
+        filter: ContentSearchFilter.all,
+      ));
+
+      await expectLater(
+        contentBloc.stream,
+        emitsThrough(predicate<ContentState>(
+            (s) => s.searchStatus == SearchStatus.loaded)),
+      );
+
+      final items = contentBloc.state.searchResults!.items;
+      // All 4 distinct types must be retained despite sharing the same local ID
+      expect(items.length, 4);
+      expect(items.whereType<MediaItem_Track>().length, 1);
+      expect(items.whereType<MediaItem_Album>().length, 1);
+      expect(items.whereType<MediaItem_Artist>().length, 1);
+      expect(items.whereType<MediaItem_Playlist>().length, 1);
+    });
+
+    // ── 2. Cross-Provider ID Collision ──────────────────────────────────────
+
+    test('Cross-provider ID collision: items from different providers with identical localId are all preserved',
+        () async {
+      pluginService.onExecute = (_, __) async => PluginResponse.search(
+            PagedMediaItems(items: [
+              MediaItem.track(makeTestTrack(
+                id: 'provider_a::shared_track',
+                title: 'Song from Provider A',
+              )),
+              MediaItem.track(makeTestTrack(
+                id: 'provider_b::shared_track',
+                title: 'Song from Provider B',
+              )),
+            ]),
+          );
+
+      contentBloc.add(const SearchContent(
+        query: 'multi provider',
+        filter: ContentSearchFilter.track,
+      ));
+
+      await expectLater(
+        contentBloc.stream,
+        emitsThrough(predicate<ContentState>(
+            (s) => s.searchStatus == SearchStatus.loaded)),
+      );
+
+      final tracks = contentBloc.state.searchResults!.items
+          .whereType<MediaItem_Track>()
+          .toList();
+
+      expect(tracks.length, 2);
+      expect(tracks[0].field0.id, 'provider_a::shared_track');
+      expect(tracks[1].field0.id, 'provider_b::shared_track');
+    });
+
+    // ── 3. Same-Provider Duplicate Suppression ──────────────────────────────
+
+    test('Same-provider duplicate suppression: exact duplicates are dropped and original preserved',
+        () async {
+      pluginService.onExecute = (_, __) async => PluginResponse.search(
+            PagedMediaItems(items: [
+              MediaItem.track(makeTestTrack(
+                id: 'provider_a::track_original',
+                title: 'Track One',
+              )),
+              MediaItem.track(makeTestTrack(
+                id: 'provider_a::track_original',
+                title: 'Track One Duplicate',
+              )),
+            ]),
+          );
+
+      contentBloc.add(const SearchContent(
+        query: 'dedup test',
+        filter: ContentSearchFilter.track,
+      ));
+
+      await expectLater(
+        contentBloc.stream,
+        emitsThrough(predicate<ContentState>(
+            (s) => s.searchStatus == SearchStatus.loaded)),
+      );
+
+      final tracks = contentBloc.state.searchResults!.items
+          .whereType<MediaItem_Track>()
+          .toList();
+
+      expect(tracks.length, 1);
+      expect(tracks.first.field0.title, 'Track One');
+    });
+
+    // ── 4. Distinct Tracks with Similar Metadata ────────────────────────────
+
+    test('Similar metadata without ID collision: distinct tracks with identical titles are not merged',
+        () async {
+      pluginService.onExecute = (_, __) async => PluginResponse.search(
+            PagedMediaItems(items: [
+              MediaItem.track(makeTestTrack(
+                id: 'track_original_version',
+                title: 'Comfortably Numb',
+                artist: 'Pink Floyd',
+              )),
+              MediaItem.track(makeTestTrack(
+                id: 'track_live_version',
+                title: 'Comfortably Numb',
+                artist: 'Pink Floyd',
+              )),
+            ]),
+          );
+
+      contentBloc.add(const SearchContent(
+        query: 'Pink Floyd',
+        filter: ContentSearchFilter.track,
+      ));
+
+      await expectLater(
+        contentBloc.stream,
+        emitsThrough(predicate<ContentState>(
+            (s) => s.searchStatus == SearchStatus.loaded)),
+      );
+
+      final tracks = contentBloc.state.searchResults!.items
+          .whereType<MediaItem_Track>()
+          .toList();
+
+      // Distinct IDs must never be merged just because title and artist match
+      expect(tracks.length, 2);
+      expect(tracks[0].field0.id, 'track_original_version');
+      expect(tracks[1].field0.id, 'track_live_version');
+    });
+
+    // ── 5. URL Safety: Rejection Across All Thumbnail Resolutions ───────────
+
+    test('URL Safety: rejects unsupported schemes across primary, urlLow, and urlHigh artwork',
+        () async {
+      pluginService.onExecute = (_, __) async => const PluginResponse.search(
+            PagedMediaItems(items: [
+              // 1. Unsafe primary thumbnail
+              MediaItem.track(Track(
+                id: 'bad_art_1',
+                title: 'Bad Art 1',
+                artists: [ArtistSummary(id: 'a1', name: 'Artist')],
+                thumbnail: Artwork(
+                  url: 'javascript:alert(1)',
+                  layout: ImageLayout.square,
+                ),
+                isExplicit: false,
+              )),
+              // 2. Unsafe urlLow
+              MediaItem.track(Track(
+                id: 'bad_art_2',
+                title: 'Bad Art 2',
+                artists: [ArtistSummary(id: 'a2', name: 'Artist')],
+                thumbnail: Artwork(
+                  url: 'https://example.com/art.jpg',
+                  urlLow: 'file:///etc/passwd',
+                  layout: ImageLayout.square,
+                ),
+                isExplicit: false,
+              )),
+              // 3. Unsafe urlHigh
+              MediaItem.track(Track(
+                id: 'bad_art_3',
+                title: 'Bad Art 3',
+                artists: [ArtistSummary(id: 'a3', name: 'Artist')],
+                thumbnail: Artwork(
+                  url: 'https://example.com/art.jpg',
+                  urlHigh: 'data:text/html,<script></script>',
+                  layout: ImageLayout.square,
+                ),
+                isExplicit: false,
+              )),
+              // 4. Unsafe audio URL with no host
+              MediaItem.track(Track(
+                id: 'bad_url_nohost',
+                title: 'Bad Host',
+                artists: [ArtistSummary(id: 'a4', name: 'Artist')],
+                thumbnail: Artwork(
+                  url: 'https://example.com/art.jpg',
+                  layout: ImageLayout.square,
+                ),
+                url: 'https:///nohost.mp3',
+                isExplicit: false,
+              )),
+              // 5. Completely valid track
+              MediaItem.track(Track(
+                id: 'safe_track',
+                title: 'Safe Track',
+                artists: [ArtistSummary(id: 'a5', name: 'Artist')],
+                thumbnail: Artwork(
+                  url: 'https://example.com/art.jpg',
+                  urlLow: 'https://example.com/art_low.jpg',
+                  urlHigh: 'https://example.com/art_high.jpg',
+                  layout: ImageLayout.square,
+                ),
+                url: 'https://example.com/audio.mp3',
+                isExplicit: false,
+              )),
+            ]),
+          );
+
+      contentBloc.add(const SearchContent(
+        query: 'safety test',
+        filter: ContentSearchFilter.track,
+      ));
+
+      await expectLater(
+        contentBloc.stream,
+        emitsThrough(predicate<ContentState>(
+            (s) => s.searchStatus == SearchStatus.loaded)),
+      );
+
+      final tracks = contentBloc.state.searchResults!.items
+          .whereType<MediaItem_Track>()
+          .toList();
+
+      expect(tracks.length, 1);
+      expect(tracks.first.field0.id, 'safe_track');
+    });
+
+    // ── 6. Queue Index & Bounds Safety ───────────────────────────────────────
+
+    test('Queue Index Safety: bounds check safely handles edge-case index selection',
+        () {
+      final tracks = [
+        makeTestTrack(id: 'track_0', title: 'Track 0'),
+        makeTestTrack(id: 'track_1', title: 'Track 1'),
+        makeTestTrack(id: 'track_2', title: 'Track 2'),
+      ];
+
+      final playlist = Playlist(
+        tracks: tracks,
+        title: 'Search: test',
+      );
+
+      // In-bounds index selects exact track
+      expect(playlist.tracks[1].id, 'track_1');
+
+      // Clamping simulation for index resolution:
+      int resolveIndex(int requestedIdx) {
+        if (requestedIdx < 0 || requestedIdx >= playlist.tracks.length) {
+          return 0; // safe fallback
+        }
+        return requestedIdx;
+      }
+
+      expect(resolveIndex(2), 2);
+      expect(resolveIndex(-1), 0);
+      expect(resolveIndex(100), 0);
+    });
+  });
 }

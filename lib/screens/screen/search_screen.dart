@@ -1725,19 +1725,22 @@ class _SliverSearchResults extends StatelessWidget {
         if (albums.isNotEmpty) ...[
           _sliverSectionHeader(AppLocalizations.of(context)!.searchAlbums),
           _buildResponsiveGrid(albums
-              .map((a) => AlbumCard(album: a, pluginId: pluginId))
+              .map((a) => AlbumCard(
+                  album: a, pluginId: pluginIdOf(a.id) ?? pluginId))
               .toList()),
         ],
         if (artists.isNotEmpty) ...[
           _sliverSectionHeader(AppLocalizations.of(context)!.searchArtists),
           _buildResponsiveGrid(artists
-              .map((a) => ArtistCard(artist: a, pluginId: pluginId))
+              .map((a) => ArtistCard(
+                  artist: a, pluginId: pluginIdOf(a.id) ?? pluginId))
               .toList()),
         ],
         if (playlists.isNotEmpty) ...[
           _sliverSectionHeader(AppLocalizations.of(context)!.searchPlaylists),
           _buildResponsiveGrid(playlists
-              .map((p) => PlaylistCard(playlist: p, pluginId: pluginId))
+              .map((p) => PlaylistCard(
+                  playlist: p, pluginId: pluginIdOf(p.id) ?? pluginId))
               .toList()),
         ],
         if (state.searchStatus == SearchStatus.error && hasLocal)
