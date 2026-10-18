@@ -36,29 +36,42 @@ jobs:
                   echo "VERSION=$ver" >> $env:GITHUB_ENV
 
             - name: Configure Keystore
-              if: "${{ secrets.KEY_STORE != '' }}"
+              env:
+                KEY_STORE: ${{ secrets.KEY_STORE }}
+                KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+                STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+                KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
               run: |
-                  $b64 = "${{ secrets.KEY_STORE }}"
-                  $filename = "./android/tarangx.jks"
-                  $bytes =[Convert]::FromBase64String($b64)
-                  [IO.File]::WriteAllBytes($filename, $bytes)
-                  "storeFile=tarangx.jks" | Out-File -FilePath ./android/key.properties -Encoding utf8
-                  "keyPassword=${{ secrets.KEY_PASSWORD }}" | Out-File -FilePath ./android/key.properties -Append -Encoding utf8
-                  "storePassword=${{ secrets.STORE_PASSWORD }}" | Out-File -FilePath ./android/key.properties -Append -Encoding utf8
-                  "keyAlias=${{ secrets.KEY_ALIAS }}" | Out-File -FilePath ./android/key.properties -Append -Encoding utf8
+                  if ($env:KEY_STORE) {
+                      $filename = "./android/tarangx.jks"
+                      $bytes =[Convert]::FromBase64String($env:KEY_STORE)
+                      [IO.File]::WriteAllBytes($filename, $bytes)
+                      "storeFile=tarangx.jks" | Out-File -FilePath ./android/key.properties -Encoding utf8
+                      "keyPassword=$env:KEY_PASSWORD" | Out-File -FilePath ./android/key.properties -Append -Encoding utf8
+                      "storePassword=$env:STORE_PASSWORD" | Out-File -FilePath ./android/key.properties -Append -Encoding utf8
+                      "keyAlias=$env:KEY_ALIAS" | Out-File -FilePath ./android/key.properties -Append -Encoding utf8
+                      Write-Host "Keystore configured successfully."
+                  } else {
+                      Write-Host "No KEY_STORE secret found, skipping custom keystore."
+                  }
 
             - name: Build App files
               run: flutter build apk --release --split-per-abi --build-number ${{github.run_number}}
 
             - name: Verify Sign
-              if: "${{ secrets.KEY_STORE != '' }}"
+              env:
+                KEY_STORE: ${{ secrets.KEY_STORE }}
               run: |
-                  $buildToolsDir = Get-ChildItem "$env:ANDROID_HOME\build-tools" | Where-Object { $_.PSIsContainer } | Sort-Object Name -Descending | Select-Object -First 1
-                  Write-Host "Using build tools version: $($buildToolsDir.Name)"
-                  & "$($buildToolsDir.FullName)\apksigner.bat" verify build/app/outputs/flutter-apk/app-release.apk
-                  & "$($buildToolsDir.FullName)\apksigner.bat" verify build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
-                  & "$($buildToolsDir.FullName)\apksigner.bat" verify build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-                  & "$($buildToolsDir.FullName)\apksigner.bat" verify build/app/outputs/flutter-apk/app-x86_64-release.apk
+                  if ($env:KEY_STORE) {
+                      $buildToolsDir = Get-ChildItem "$env:ANDROID_HOME\build-tools" | Where-Object { $_.PSIsContainer } | Sort-Object Name -Descending | Select-Object -First 1
+                      Write-Host "Using build tools version: $($buildToolsDir.Name)"
+                      & "$($buildToolsDir.FullName)\apksigner.bat" verify build/app/outputs/flutter-apk/app-release.apk
+                      & "$($buildToolsDir.FullName)\apksigner.bat" verify build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+                      & "$($buildToolsDir.FullName)\apksigner.bat" verify build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+                      & "$($buildToolsDir.FullName)\apksigner.bat" verify build/app/outputs/flutter-apk/app-x86_64-release.apk
+                  } else {
+                      Write-Host "No KEY_STORE secret, skipping sign verification."
+                  }
 
             - name: Rename APK file
               shell: powershell
