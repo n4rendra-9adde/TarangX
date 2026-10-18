@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:developer';
+import 'dart:io';
 
 import 'package:media_kit/media_kit.dart';
 import 'package:rxdart/rxdart.dart';
@@ -170,6 +171,8 @@ class PlayerEngine {
 
     _activePlayerSubject = BehaviorSubject.seeded(_playerA);
     _subs = _buildSubscriptions();
+
+    _clampLinuxSinkVolume();
   }
 
   void _configureNativePlayer(Player player) {
@@ -180,7 +183,52 @@ class PlayerEngine {
       native.setProperty('cache', 'yes');
       native.setProperty('demuxer-max-bytes', '134217728'); // 128 MB
       native.setProperty('network-timeout', '15');
+
+      // Audio fidelity & anti-clipping safeguards for laptop playback:
+      // 1. Cap internal gain at 100% (0 dB) to strictly eliminate digital clipping
+      native.setProperty('volume-max', '100.0');
+      // 2. Identify client as TarangX so PulseAudio/PipeWire isolates stream volume
+      native.setProperty('audio-client-name', 'TarangX');
+      native.setProperty('pulse-client-name', 'TarangX');
+      // 3. Keep silence running to prevent hardware DAC click/pop on Realtek ALC233 sound chips
+      native.setProperty('audio-stream-silence', 'yes');
+      // 4. Smooth gapless audio transitions
+      native.setProperty('gapless-audio', 'yes');
+      native.setProperty('audio-pitch-correction', 'yes');
+      // 5. Generous audio buffer to prevent underruns/crackling on laptop power-saving states
+      native.setProperty('audio-buffer', '0.2');
     }
+  }
+
+  /// Normalizes any over-amplified Linux desktop sink inputs (>100% / >0dB)
+  /// back to 100% unity gain to prevent digital clipping and speaker buzz.
+  static void _clampLinuxSinkVolume() {
+    if (!Platform.isLinux) return;
+    unawaited(Future.microtask(() async {
+      try {
+        final result = await Process.run('pactl', ['list', 'sink-inputs']);
+        if (result.exitCode != 0) return;
+        final output = result.stdout as String;
+        final blocks = output.split('Sink Input #');
+        for (final block in blocks) {
+          if (block.contains('media.name = "TarangX"') ||
+              block.contains('application.name = "mpv"')) {
+            final idMatch = RegExp(r'^(\d+)').firstMatch(block.trim());
+            final volMatch = RegExp(r'Volume:[^\n]*?(\d+)%').firstMatch(block);
+            if (idMatch != null && volMatch != null) {
+              final id = idMatch.group(1);
+              final pct = int.tryParse(volMatch.group(1) ?? '100') ?? 100;
+              if (pct > 100 && id != null) {
+                await Process.run(
+                    'pactl', ['set-sink-input-volume', id, '100%']);
+                log('Clamped over-amplified Linux sink-input #$id from $pct% to 100%',
+                    name: 'PlayerEngine');
+              }
+            }
+          }
+        }
+      } catch (_) {}
+    }));
   }
 
   List<StreamSubscription> _buildSubscriptions() {
@@ -606,9 +654,15 @@ class PlayerEngine {
     _userVolume = value.clamp(0.0, 1.0);
     if (!_isTransitioning) {
       final vol = _userVolume * 100.0;
-      await Future.wait([_playerA.setVolume(vol), _playerB.setVolume(vol)]);
+      await _active.setVolume(vol);
+      if (!_standbyPreloaded) {
+        await _standby.setVolume(vol);
+      } else {
+        await _standby.setVolume(0.0);
+      }
     }
     _volumeSubject.add(_userVolume);
+    _clampLinuxSinkVolume();
   }
 
   Future<void> setSpeed(double speed) async {
@@ -786,8 +840,12 @@ class PlayerEngine {
 
   String _buildEqualizerFilter() {
     final parts = <String>[];
+    double maxBoost = 0.0;
     for (var i = 0; i < _eqBands.length; i++) {
       final band = _eqBands[i];
+      if (band.gain > maxBoost) {
+        maxBoost = band.gain;
+      }
       if (band.gain.abs() < 0.05) continue;
 
       final width = switch (i) {
@@ -801,6 +859,13 @@ class PlayerEngine {
       );
     }
     if (parts.isEmpty) return '';
+
+    // Anti-clipping limiter: if any EQ band is boosted above 0 dB, apply
+    // a soft limiter so the signal never exceeds 0 dBFS into digital clipping.
+    if (maxBoost > 0.0) {
+      parts.add('alimiter=limit=0.95:attack=5:release=50');
+    }
+
     return 'lavfi=[${parts.join(',')}]';
   }
 
