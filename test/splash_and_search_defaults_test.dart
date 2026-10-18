@@ -123,11 +123,6 @@ void main() {
         List<PluginInfo> resolvers, String persistedId) {
       if (resolvers.isEmpty) return '';
 
-      if (persistedId.isNotEmpty &&
-          resolvers.any((p) => p.manifest.id == persistedId)) {
-        return persistedId;
-      }
-
       final saavn = resolvers.cast<PluginInfo?>().firstWhere(
         (p) =>
             p != null &&
@@ -135,8 +130,23 @@ void main() {
                 p.manifest.name.toLowerCase().contains('saavn')),
         orElse: () => null,
       );
+
       if (saavn != null) {
+        if (persistedId.isEmpty ||
+            persistedId.contains('ytvideo') ||
+            persistedId.contains('ytmusic') ||
+            persistedId.contains('saavn')) {
+          return saavn.manifest.id;
+        }
+        if (resolvers.any((p) => p.manifest.id == persistedId)) {
+          return persistedId;
+        }
         return saavn.manifest.id;
+      }
+
+      if (persistedId.isNotEmpty &&
+          resolvers.any((p) => p.manifest.id == persistedId)) {
+        return persistedId;
       }
 
       return resolvers.first.manifest.id;
@@ -156,17 +166,32 @@ void main() {
       expect(selected, 'content-resolver.bloomfactory.jisaavn');
     });
 
-    test('preserves user persisted plugin choice when valid and loaded', () {
+    test('replaces legacy auto-selected ytvideo fallback with JioSaavn', () {
       final ytMusic = FakePluginInfo(
           id: 'content-resolver.bloomfactory.ytmusic', name: 'YouTube Music');
       final jioSaavn = FakePluginInfo(
           id: 'content-resolver.bloomfactory.jisaavn', name: 'JioSaavn');
+      final ytVideo = FakePluginInfo(
+          id: 'content-resolver.bloomfactory.ytvideo', name: 'YouTube Video');
 
-      final resolvers = [ytMusic, jioSaavn];
+      final resolvers = [ytVideo, jioSaavn, ytMusic];
 
       final selected = resolveDefaultSearchPlugin(
-          resolvers, 'content-resolver.bloomfactory.ytmusic');
-      expect(selected, 'content-resolver.bloomfactory.ytmusic');
+          resolvers, 'content-resolver.bloomfactory.ytvideo');
+      expect(selected, 'content-resolver.bloomfactory.jisaavn');
+    });
+
+    test('preserves user persisted non-youtube plugin choice when valid and loaded', () {
+      final spotify = FakePluginInfo(
+          id: 'content-resolver.bloomfactory.spotify', name: 'Spotify');
+      final jioSaavn = FakePluginInfo(
+          id: 'content-resolver.bloomfactory.jisaavn', name: 'JioSaavn');
+
+      final resolvers = [spotify, jioSaavn];
+
+      final selected = resolveDefaultSearchPlugin(
+          resolvers, 'content-resolver.bloomfactory.spotify');
+      expect(selected, 'content-resolver.bloomfactory.spotify');
     });
 
     test('falls back to JioSaavn when persisted plugin is not in loaded resolvers',

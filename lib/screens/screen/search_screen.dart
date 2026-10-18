@@ -74,12 +74,6 @@ class _SearchScreenState extends State<SearchScreen> {
       List<PluginInfo> resolvers, String persistedId) {
     if (resolvers.isEmpty) return '';
 
-    // If the user has an explicitly persisted choice that is still loaded:
-    if (persistedId.isNotEmpty &&
-        resolvers.any((p) => p.manifest.id == persistedId)) {
-      return persistedId;
-    }
-
     // Default to JioSaavn if available:
     final saavn = resolvers.cast<PluginInfo?>().firstWhere(
       (p) =>
@@ -88,8 +82,26 @@ class _SearchScreenState extends State<SearchScreen> {
               p.manifest.name.toLowerCase().contains('saavn')),
       orElse: () => null,
     );
+
+    // If JioSaavn exists, it MUST be the default search source,
+    // overriding empty persisted choice or legacy auto-selected ytvideo/ytmusic fallback.
     if (saavn != null) {
+      if (persistedId.isEmpty ||
+          persistedId.contains('ytvideo') ||
+          persistedId.contains('ytmusic') ||
+          persistedId.contains('saavn')) {
+        return saavn.manifest.id;
+      }
+      // If user explicitly chose another third-party provider (e.g. spotify/soundcloud), respect it
+      if (resolvers.any((p) => p.manifest.id == persistedId)) {
+        return persistedId;
+      }
       return saavn.manifest.id;
+    }
+
+    if (persistedId.isNotEmpty &&
+        resolvers.any((p) => p.manifest.id == persistedId)) {
+      return persistedId;
     }
 
     return resolvers.first.manifest.id;
@@ -118,6 +130,9 @@ class _SearchScreenState extends State<SearchScreen> {
 
       _activePluginIdNotifier.value = activeId;
       _contentBloc.add(SetActiveContentPlugin(pluginId: activeId));
+      if (persistedId != activeId) {
+        context.read<SettingsCubit>().setSearchPluginId(activeId);
+      }
     }
 
     if (widget.searchQuery.isNotEmpty) {
@@ -262,10 +277,20 @@ class _SearchScreenState extends State<SearchScreen> {
   @override
   Widget build(BuildContext context) {
     return BlocListener<PluginBloc, PluginState>(
-      listenWhen: (prev, curr) =>
-          prev.loadedContentResolvers.isEmpty &&
-          curr.loadedContentResolvers.isNotEmpty &&
-          _activePluginIdNotifier.value == null,
+      listenWhen: (prev, curr) {
+        final hadResolvers = prev.loadedContentResolvers.isNotEmpty;
+        final hasResolvers = curr.loadedContentResolvers.isNotEmpty;
+        final currentActive = _activePluginIdNotifier.value;
+        final hasSaavnNow = curr.loadedContentResolvers.any((p) =>
+            p.manifest.id.toLowerCase().contains('saavn') ||
+            p.manifest.name.toLowerCase().contains('saavn'));
+        final isSaavnActive = currentActive != null &&
+            currentActive.toLowerCase().contains('saavn');
+
+        return (!hadResolvers && hasResolvers) ||
+            (currentActive == null && hasResolvers) ||
+            (hasSaavnNow && !isSaavnActive);
+      },
       listener: (context, pluginState) {
         final resolvers = pluginState.loadedContentResolvers;
         final persistedId = context.read<SettingsCubit>().state.searchPluginId;
@@ -273,6 +298,9 @@ class _SearchScreenState extends State<SearchScreen> {
 
         _activePluginIdNotifier.value = activeId;
         _contentBloc.add(SetActiveContentPlugin(pluginId: activeId));
+        if (persistedId != activeId) {
+          context.read<SettingsCubit>().setSearchPluginId(activeId);
+        }
       },
       child: GestureDetector(
         onTap: () {
@@ -691,33 +719,55 @@ class _PluginsGlassyBoxSliver extends StatelessWidget {
                           physics: const BouncingScrollPhysics(),
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           child: Row(
-                            children: resolvers
-                                .map((plugin) => Padding(
-                                      padding: const EdgeInsets.only(right: 10),
-                                      child: _PluginChip(
-                                        plugin: plugin,
-                                        activePluginNotifier:
-                                            activePluginNotifier,
-                                        onTap: () {
-                                          final id = plugin.manifest.id;
-                                          if (activePluginNotifier.value == id) {
-                                            return;
-                                          }
-                                          activePluginNotifier.value = id;
-                                          contentBloc.add(
-                                              SetActiveContentPlugin(
-                                                  pluginId: id));
-                                          context
-                                              .read<SettingsCubit>()
-                                              .setSearchPluginId(id);
-                                          if (textEditingController.text
-                                              .isNotEmpty) {
-                                            onPluginChanged();
-                                          }
-                                        },
-                                      ),
-                                    ))
-                                .toList(),
+                            children: () {
+                              final sorted = List<PluginInfo>.from(resolvers);
+                              sorted.sort((a, b) {
+                                final aIsSaavn = a.manifest.id
+                                        .toLowerCase()
+                                        .contains('saavn') ||
+                                    a.manifest.name
+                                        .toLowerCase()
+                                        .contains('saavn');
+                                final bIsSaavn = b.manifest.id
+                                        .toLowerCase()
+                                        .contains('saavn') ||
+                                    b.manifest.name
+                                        .toLowerCase()
+                                        .contains('saavn');
+                                if (aIsSaavn && !bIsSaavn) return -1;
+                                if (!aIsSaavn && bIsSaavn) return 1;
+                                return 0;
+                              });
+                              return sorted
+                                  .map((plugin) => Padding(
+                                        padding:
+                                            const EdgeInsets.only(right: 10),
+                                        child: _PluginChip(
+                                          plugin: plugin,
+                                          activePluginNotifier:
+                                              activePluginNotifier,
+                                          onTap: () {
+                                            final id = plugin.manifest.id;
+                                            if (activePluginNotifier.value ==
+                                                id) {
+                                              return;
+                                            }
+                                            activePluginNotifier.value = id;
+                                            contentBloc.add(
+                                                SetActiveContentPlugin(
+                                                    pluginId: id));
+                                            context
+                                                .read<SettingsCubit>()
+                                                .setSearchPluginId(id);
+                                            if (textEditingController
+                                                .text.isNotEmpty) {
+                                              onPluginChanged();
+                                            }
+                                          },
+                                        ),
+                                      ))
+                                  .toList();
+                            }(),
                           ),
                         ),
                     ],

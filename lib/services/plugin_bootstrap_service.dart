@@ -331,7 +331,10 @@ class PluginBootstrapService {
 
       final currentSearch =
           await settingsDao.getSettingStr(SettingKeys.searchPluginId);
-      if (currentSearch == null || currentSearch.isEmpty) {
+      if (currentSearch == null ||
+          currentSearch.isEmpty ||
+          currentSearch.contains('ytvideo') ||
+          currentSearch.contains('ytmusic')) {
         final searchPlugin = available.firstWhere(
           (p) =>
               p.pluginType == PluginType.contentResolver &&
