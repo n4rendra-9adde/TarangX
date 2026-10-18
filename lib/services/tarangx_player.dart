@@ -862,6 +862,7 @@ class TarangXMusicPlayer extends BaseAudioHandler
         if (advanced) {
           final next = _queueManager.currentTrack;
           if (next != null) await _enqueuePlayTrack(next, doPlay: true);
+          unawaited(_checkRelatedSongs());
         } else {
           await engine.stop();
         }
@@ -1022,6 +1023,7 @@ class TarangXMusicPlayer extends BaseAudioHandler
       if (advanced) {
         final next = _queueManager.currentTrack;
         if (next != null) await _enqueuePlayTrack(next, doPlay: true);
+        unawaited(_checkRelatedSongs());
       } else {
         _playCompleter?.operation.cancel();
         _playCompleter = null;
@@ -1138,8 +1140,11 @@ class TarangXMusicPlayer extends BaseAudioHandler
 
     final isAlreadyCurrent = _queueManager.currentTrack?.id == track.id;
 
-    if (isAlreadyCurrent && engine.playing) {
+    if (isAlreadyCurrent) {
       queueTitle.add('Radio: ${track.title}');
+      if (playImmediately && !engine.playing) {
+        await play();
+      }
       final initialTracks = await _relatedSongsManager.startRadio(
         seed: RadioSeed.fromTrack(track),
         currentTrack: track,
@@ -1185,6 +1190,28 @@ class TarangXMusicPlayer extends BaseAudioHandler
     try {
       fromPlaylist.add(false);
       _clearPreloadedMarker();
+
+      final current = _queueManager.currentTrack;
+      final isCurrentByArtist = current != null &&
+          current.artists.any((a) =>
+              (a.id.isNotEmpty && a.id == artist.id) ||
+              a.name.toLowerCase().trim() == artist.name.toLowerCase().trim());
+
+      if (isCurrentByArtist) {
+        queueTitle.add('Radio: ${artist.name}');
+        if (playImmediately && !engine.playing) {
+          await play();
+        }
+        final initialTracks = await _relatedSongsManager.startRadio(
+          seed: RadioSeed.fromArtist(artist),
+          currentTrack: current,
+          playImmediately: playImmediately,
+        );
+        if (initialTracks.isNotEmpty) {
+          _queueManager.addTracks(initialTracks, atLast: true);
+        }
+        return;
+      }
 
       Track? initialTrack;
       if (topTracks != null && topTracks.isNotEmpty) {
@@ -1310,6 +1337,8 @@ class TarangXMusicPlayer extends BaseAudioHandler
 
   void clearQueue() {
     _clearPreloadedMarker();
+    _relatedSongsManager.stopRadio();
+    _relatedSongsManager.clearRelatedSongs();
     _queueManager.clearQueue();
     if (_queueManager.isEmpty) {
       mediaItem.add(null);

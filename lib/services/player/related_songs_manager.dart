@@ -35,6 +35,7 @@ class RelatedSongsManager {
   final Set<String> _manualTrackIds = <String>{};
   final Map<String, RecommendationReason> _trackReasons = <String, RecommendationReason>{};
 
+  int _sessionGeneration = 0;
   String? _nextPageToken;
   int _consecutiveFailures = 0;
   DateTime? _lastFailureTime;
@@ -60,6 +61,7 @@ class RelatedSongsManager {
     List<Track>? initialTracks,
     bool playImmediately = true,
   }) async {
+    final currentGeneration = ++_sessionGeneration;
     isRadioActive.add(true);
     activeRadioSeed.add(seed);
     radioError.add(null);
@@ -87,6 +89,14 @@ class RelatedSongsManager {
         excludedTrackIds: _sessionTrackIds,
       );
 
+      // Guard against stale async completion:
+      // If the session was stopped or a newer seed was started while awaiting, discard results.
+      if (_sessionGeneration != currentGeneration || !isRadioActive.value) {
+        log('Stale radio batch discarded for seed "${seed.title}"',
+            name: 'RelatedSongsManager');
+        return [];
+      }
+
       final newTracks = <Track>[];
       for (final scored in batch.tracks) {
         if (_sessionTrackIds.add(scored.track.id)) {
@@ -101,11 +111,14 @@ class RelatedSongsManager {
           name: 'RelatedSongsManager');
       return newTracks;
     } catch (e) {
+      if (_sessionGeneration != currentGeneration) return [];
       log('Failed to start Infinite Radio: $e', name: 'RelatedSongsManager');
       radioError.add('Could not load radio tracks: $e');
       return [];
     } finally {
-      isGeneratingRadio.add(false);
+      if (_sessionGeneration == currentGeneration) {
+        isGeneratingRadio.add(false);
+      }
     }
   }
 
@@ -113,6 +126,7 @@ class RelatedSongsManager {
   /// If [clearUpcoming] is true and [queueManager] is provided, only upcoming auto-generated
   /// radio tracks are removed from the queue, preserving manual additions.
   void stopRadio({bool clearUpcoming = false, QueueManager? queueManager}) {
+    _sessionGeneration++;
     if (clearUpcoming && queueManager != null && _radioTrackIds.isNotEmpty) {
       queueManager.removeUpcomingTracks(_radioTrackIds);
       _radioTrackIds.clear();
@@ -121,6 +135,7 @@ class RelatedSongsManager {
     activeRadioSeed.add(null);
     _nextPageToken = null;
     radioError.add(null);
+    isGeneratingRadio.add(false);
     log('Infinite Radio stopped.', name: 'RelatedSongsManager');
   }
 
@@ -155,6 +170,7 @@ class RelatedSongsManager {
       }
     }
 
+    final currentGeneration = _sessionGeneration;
     isGeneratingRadio.add(true);
     try {
       final seed = activeRadioSeed.value ?? RadioSeed.fromTrack(currentMedia);
@@ -170,6 +186,14 @@ class RelatedSongsManager {
         excludedTrackIds: excluded,
       );
 
+      // Verify that this session is still the active generation and not stopped
+      if (_sessionGeneration != currentGeneration ||
+          (!isRadioActive.value && activeRadioSeed.value == null)) {
+        log('Stale replenishment discarded for seed "${seed.title}"',
+            name: 'RelatedSongsManager');
+        return;
+      }
+
       final candidates = <Track>[];
       for (final scored in batch.tracks) {
         if (_sessionTrackIds.add(scored.track.id) &&
@@ -182,6 +206,7 @@ class RelatedSongsManager {
 
       if (candidates.isNotEmpty) {
         _consecutiveFailures = 0;
+        _lastFailureTime = null;
         _nextPageToken = batch.nextPageToken;
         onAddQueueItems?.call(candidates, atLast: true);
         log('Replenished ${candidates.length} tracks into queue for Radio seed "${seed.title}"',
@@ -191,15 +216,20 @@ class RelatedSongsManager {
         _lastFailureTime = DateTime.now();
       }
     } catch (e) {
-      _consecutiveFailures++;
-      _lastFailureTime = DateTime.now();
-      log('Error replenishing radio queue: $e', name: 'RelatedSongsManager');
+      if (_sessionGeneration == currentGeneration) {
+        _consecutiveFailures++;
+        _lastFailureTime = DateTime.now();
+        log('Error replenishing radio queue: $e', name: 'RelatedSongsManager');
+      }
     } finally {
-      isGeneratingRadio.add(false);
+      if (_sessionGeneration == currentGeneration) {
+        isGeneratingRadio.add(false);
+      }
     }
   }
 
   void clearRelatedSongs() {
+    _sessionGeneration++;
     relatedSongs.add([]);
     _sessionTrackIds.clear();
     _radioTrackIds.clear();

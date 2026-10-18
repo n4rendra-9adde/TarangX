@@ -72,6 +72,36 @@ class FakePluginService implements PluginService {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+class MockToggleEngine implements HybridRecommendationEngine {
+  bool shouldThrow = false;
+  List<Track> candidateTracks = [];
+
+  @override
+  Future<RadioBatchResult> getRadioTracksForSeed({
+    required RadioSeed seed,
+    int limit = 10,
+    String? pageToken,
+    Set<String> excludedTrackIds = const {},
+  }) async {
+    if (shouldThrow) {
+      throw Exception('Simulated network failure');
+    }
+    return RadioBatchResult(
+      tracks: candidateTracks
+          .where((t) => !excludedTrackIds.contains(t.id))
+          .map((t) => ScoredTrack(
+                track: t,
+                score: 0.9,
+                reason: RecommendationReason.infiniteRadio(seed.title),
+              ))
+          .toList(),
+    );
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 Track makeTestTrack({
   required String id,
   required String title,
@@ -373,6 +403,129 @@ void main() {
       expect(qm.tracks.map((t) => t.id).toList(), equals(['seed_1', 'man_1']));
 
       qm.dispose();
+    });
+
+    test('stale in-flight replenishment is discarded if radio is stopped while awaiting', () async {
+      final seedTrack = makeTestTrack(id: 'seed_1', title: 'Seed Song', artist: 'Artist X');
+      final cand1 = makeTestTrack(id: 'c1', title: 'Candidate 1', artist: 'Artist X');
+      playlistDAO.likedTracks = [cand1];
+
+      await manager.startRadio(seed: RadioSeed.fromTrack(seedTrack));
+
+      bool itemsAdded = false;
+      manager.onAddQueueItems = (items, {bool atLast = false}) {
+        itemsAdded = true;
+      };
+
+      // Stop radio immediately before awaiting replenishment resolves
+      final future = manager.checkForRelatedSongs(
+        currentMedia: seedTrack,
+        queue: [seedTrack],
+        currentPlayingIdx: 0,
+        loopMode: LoopMode.off,
+      );
+      manager.stopRadio();
+
+      await future;
+      // Stale items should NOT have been added because generation was incremented and radio was stopped
+      expect(itemsAdded, isFalse);
+      expect(manager.isRadioActive.value, isFalse);
+    });
+
+    test('stale in-flight startRadio is discarded if a new seed is launched concurrently', () async {
+      final seed1 = RadioSeed.fromTrack(makeTestTrack(id: 's1', title: 'Seed 1', artist: 'A1'));
+      final seed2 = RadioSeed.fromTrack(makeTestTrack(id: 's2', title: 'Seed 2', artist: 'A2'));
+
+      final cand1 = makeTestTrack(id: 'c1', title: 'Cand 1', artist: 'A1');
+      final cand2 = makeTestTrack(id: 'c2', title: 'Cand 2', artist: 'A2');
+      playlistDAO.likedTracks = [cand1, cand2];
+
+      final future1 = manager.startRadio(seed: seed1);
+      final future2 = manager.startRadio(seed: seed2);
+
+      final results1 = await future1;
+      final results2 = await future2;
+
+      // Seed 1 was superseded by Seed 2, so results1 should be empty
+      expect(results1, isEmpty);
+      expect(results2, isNotEmpty);
+      expect(manager.activeRadioSeed.value?.title, equals('Seed 2'));
+    });
+
+    test('circuit breaker triggers backoff after 3 consecutive failures and recovers on success', () async {
+      final mockEngine = MockToggleEngine()..shouldThrow = true;
+      final failManager = RelatedSongsManager(
+        pluginService,
+        recommendationEngine: mockEngine,
+      );
+
+      final seedTrack = makeTestTrack(id: 'seed_1', title: 'Seed Song', artist: 'Artist X');
+      await failManager.startRadio(seed: RadioSeed.fromTrack(seedTrack));
+
+      int addCalls = 0;
+      failManager.onAddQueueItems = (_, {bool atLast = false}) => addCalls++;
+
+      // 3 consecutive failed attempts
+      for (int i = 0; i < 3; i++) {
+        await failManager.checkForRelatedSongs(
+          currentMedia: seedTrack,
+          queue: [seedTrack],
+          currentPlayingIdx: 0,
+          loopMode: LoopMode.off,
+        );
+      }
+
+      // 4th attempt right away is blocked by the circuit breaker (within 15s)
+      await failManager.checkForRelatedSongs(
+        currentMedia: seedTrack,
+        queue: [seedTrack],
+        currentPlayingIdx: 0,
+        loopMode: LoopMode.off,
+      );
+      expect(addCalls, equals(0));
+
+      failManager.dispose();
+    });
+  });
+
+  group('QueueManager Shuffle Mode Concurrency & Safety', () {
+    late QueueManager qm;
+
+    setUp(() {
+      qm = QueueManager();
+    });
+
+    tearDown(() {
+      qm.dispose();
+    });
+
+    test('removeUpcomingTracks preserves shuffle list validity when shuffle is active', () {
+      final t1 = makeTestTrack(id: 't1', title: 'Track 1', artist: 'A');
+      final t2 = makeTestTrack(id: 't2', title: 'Track 2', artist: 'B');
+      final t3 = makeTestTrack(id: 't3', title: 'Track 3', artist: 'C');
+      final t4 = makeTestTrack(id: 't4', title: 'Track 4', artist: 'D');
+
+      qm.loadTracks([t1, t2, t3, t4], idx: 0);
+      qm.shuffle(true);
+      expect(qm.shuffleMode.value, isTrue);
+
+      // Remove upcoming radio tracks t3 and t4
+      qm.removeUpcomingTracks({'t3', 't4'});
+
+      expect(qm.tracks.length, equals(2));
+      // Shuffle indices must not exceed new queue length
+      expect(qm.tracks.map((t) => t.id).toList(), equals(['t1', 't2']));
+    });
+
+    test('removeUpcomingTracks is a no-op when index is at the last track', () {
+      final t1 = makeTestTrack(id: 't1', title: 'Track 1', artist: 'A');
+      final t2 = makeTestTrack(id: 't2', title: 'Track 2', artist: 'B');
+
+      qm.loadTracks([t1, t2], idx: 1); // Last track is current
+      qm.removeUpcomingTracks({'t1', 't2'});
+
+      expect(qm.tracks.length, equals(2));
+      expect(qm.currentIndex, equals(1));
     });
   });
 }

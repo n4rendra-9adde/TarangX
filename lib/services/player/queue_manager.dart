@@ -356,13 +356,22 @@ class QueueManager {
   /// Removes upcoming tracks that match the given set of IDs,
   /// strictly preserving the currently playing track and all past tracks.
   void removeUpcomingTracks(Set<String> trackIdsToRemove) {
-    if (_queue.value.isEmpty || _currentIndex >= _queue.value.length - 1) return;
+    if (_queue.value.isEmpty || trackIdsToRemove.isEmpty) return;
     final currentList = List<Track>.from(_queue.value);
-    final pastAndCurrent = currentList.sublist(0, _currentIndex + 1);
-    final upcoming = currentList.sublist(_currentIndex + 1);
+    final safeIdx = _currentIndex < 0 ? 0 : _currentIndex;
+    if (safeIdx >= currentList.length - 1) return;
+
+    final pastAndCurrent = currentList.sublist(0, safeIdx + 1);
+    final upcoming = currentList.sublist(safeIdx + 1);
     final filteredUpcoming =
         upcoming.where((t) => !trackIdsToRemove.contains(t.id)).toList();
-    _queue.add([...pastAndCurrent, ...filteredUpcoming]);
+
+    if (filteredUpcoming.length != upcoming.length) {
+      _queue.add([...pastAndCurrent, ...filteredUpcoming]);
+      if (shuffleMode.value) {
+        _ensureShuffleListValid();
+      }
+    }
   }
 
   /// Move a track from one position to another.
