@@ -40,39 +40,14 @@ class RecommendationCubit extends Cubit<RecommendationState> {
     if (!silent) emit(RecommendationLoading());
 
     try {
-      final recommended = await _engine.getRecommendations(
-        limit: 15,
-        currentTrack: seedTrack,
+      final collections = await _engine.getDiscoveryCollections(
+        seedTrack: seedTrack,
       );
 
-      final similar = seedTrack != null
-          ? await _engine.getSimilarTracks(seedTrack, limit: 10)
-          : <ScoredTrack>[];
-
-      // Extract top affinity artists (excluding any blocked artists)
-      final profile = _collector.currentProfile;
-      final dislikedArtistsLower = profile.dislikedArtistNames
-          .map((a) => a.trim().toLowerCase())
-          .where((a) => a.isNotEmpty)
-          .toSet();
-
-      final sortedArtists = profile.artistAffinities.entries.toList()
-        ..sort((a, b) => b.value.compareTo(a.value));
-      final topArtists = sortedArtists
-          .where((e) => !dislikedArtistsLower.contains(e.key.trim().toLowerCase()))
-          .take(8)
-          .map((e) => e.key)
-          .toList();
-
-      if (recommended.isEmpty && similar.isEmpty) {
+      if (collections.isEmpty) {
         emit(const RecommendationEmpty());
       } else {
-        emit(RecommendationLoaded(
-          recommendedTracks: recommended,
-          similarTracks: similar,
-          topArtists: topArtists,
-          isColdStart: profile.isColdStart,
-        ));
+        emit(RecommendationLoaded(collections: collections));
       }
     } catch (e) {
       log('Error loading recommendations: $e', name: 'RecommendationCubit');
@@ -104,22 +79,19 @@ class RecommendationCubit extends Cubit<RecommendationState> {
   Future<void> dislikeTrack(Track track) async {
     _collector.onTrackDisliked(track);
 
-    // Immediately remove from current UI state
+    // Immediately remove from current UI state across all collections
     if (state is RecommendationLoaded) {
       final current = state as RecommendationLoaded;
-      final updatedRecommended = current.recommendedTracks
-          .where((t) => t.track.id != track.id)
-          .toList();
-      final updatedSimilar = current.similarTracks
-          .where((t) => t.track.id != track.id)
-          .toList();
+      final updated = current.collections.filterDisliked(
+        dislikedTrackIds: {track.id},
+        dislikedArtistNames: {},
+      );
 
-      emit(RecommendationLoaded(
-        recommendedTracks: updatedRecommended,
-        similarTracks: updatedSimilar,
-        topArtists: current.topArtists,
-        isColdStart: current.isColdStart,
-      ));
+      if (updated.isEmpty) {
+        emit(const RecommendationEmpty());
+      } else {
+        emit(RecommendationLoaded(collections: updated));
+      }
     }
 
     // Refresh recommendations in background
@@ -131,17 +103,16 @@ class RecommendationCubit extends Cubit<RecommendationState> {
 
     if (state is RecommendationLoaded) {
       final current = state as RecommendationLoaded;
-      final cleanName = artistName.trim().toLowerCase();
-      final updatedRecommended = current.recommendedTracks.where((t) {
-        return !t.track.artists.any((a) => a.name.trim().toLowerCase() == cleanName);
-      }).toList();
+      final updated = current.collections.filterDisliked(
+        dislikedTrackIds: {},
+        dislikedArtistNames: {artistName},
+      );
 
-      emit(RecommendationLoaded(
-        recommendedTracks: updatedRecommended,
-        similarTracks: current.similarTracks,
-        topArtists: current.topArtists.where((a) => a.trim().toLowerCase() != cleanName).toList(),
-        isColdStart: current.isColdStart,
-      ));
+      if (updated.isEmpty) {
+        emit(const RecommendationEmpty());
+      } else {
+        emit(RecommendationLoaded(collections: updated));
+      }
     }
 
     unawaited(loadRecommendations(silent: true));

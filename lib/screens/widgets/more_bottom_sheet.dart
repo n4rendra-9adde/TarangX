@@ -12,6 +12,7 @@ import 'package:Bloomee/blocs/downloader/cubit/downloader_cubit.dart';
 import 'package:Bloomee/blocs/library/cubit/library_items_cubit.dart';
 import 'package:Bloomee/blocs/media_player/tarangx_player_cubit.dart';
 import 'package:Bloomee/blocs/recommendation/cubit/recommendation_cubit.dart';
+import 'package:Bloomee/services/recommendation/models/recommendation_models.dart';
 import 'package:Bloomee/core/constants/route_paths.dart';
 import 'package:Bloomee/core/models/exported.dart';
 import 'package:Bloomee/core/theme/app_theme.dart';
@@ -29,6 +30,7 @@ void showMoreBottomSheet(
   bool showAddToQueue = true,
   bool showPlayNext = true,
   VoidCallback? onDelete,
+  RecommendationReason? recommendationReason,
 }) {
   final playerCubit = context.read<TarangXPlayerCubit>();
   final libraryCubit = context.read<LibraryItemsCubit>();
@@ -62,6 +64,7 @@ void showMoreBottomSheet(
           showAddToQueue: showAddToQueue,
           showPlayNext: showPlayNext,
           onDelete: onDelete,
+          recommendationReason: recommendationReason,
           parentContext: context,
         ),
       );
@@ -76,6 +79,7 @@ class _TrackOptionsBottomSheet extends StatelessWidget {
   final bool showAddToQueue;
   final bool showPlayNext;
   final VoidCallback? onDelete;
+  final RecommendationReason? recommendationReason;
   final BuildContext parentContext;
 
   const _TrackOptionsBottomSheet({
@@ -86,6 +90,7 @@ class _TrackOptionsBottomSheet extends StatelessWidget {
     required this.showPlayNext,
     required this.parentContext,
     this.onDelete,
+    this.recommendationReason,
   });
 
   @override
@@ -203,6 +208,21 @@ class _TrackOptionsBottomSheet extends StatelessWidget {
                               ],
                             ),
                             const SizedBox(height: 8),
+                          ],
+                          if (recommendationReason != null) ...[
+                            _CompactTile(
+                              icon: MingCute.sparkles_line,
+                              title: 'Why is this recommended?',
+                              onTap: (ctx) {
+                                Navigator.pop(ctx);
+                                _showWhyRecommendedDialog(
+                                  parentContext,
+                                  song,
+                                  recommendationReason!,
+                                );
+                              },
+                            ),
+                            const SizedBox(height: 4),
                           ],
                           _CompactTile(
                             icon: MingCute.radio_line,
@@ -551,3 +571,147 @@ class _CompactTile extends StatelessWidget {
     );
   }
 }
+
+void _showWhyRecommendedDialog(
+  BuildContext context,
+  Track song,
+  RecommendationReason reason,
+) {
+  showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: Default_Theme.themeColor,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: const BorderSide(color: Default_Theme.surfaceBorderSubtle),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+      contentPadding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+      actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      title: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Default_Theme.accentColor2.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(
+              MingCute.sparkles_fill,
+              size: 20,
+              color: Default_Theme.accentLavender,
+            ),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Text(
+              'Why Recommended?',
+              style: TextStyle(
+                fontFamily: 'Gilroy',
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: Default_Theme.primaryColor1,
+              ),
+            ),
+          ),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            song.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontFamily: 'Gilroy',
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              color: Default_Theme.primaryColor1,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            song.artists.map((a) => a.name).join(', '),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontFamily: 'Gilroy',
+              fontSize: 12.5,
+              color: Default_Theme.primaryColor2,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Default_Theme.surface.withValues(alpha: 0.7),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Default_Theme.surfaceBorderSubtle),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  MingCute.information_line,
+                  size: 18,
+                  color: Default_Theme.accentColor2,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    reason.description,
+                    style: const TextStyle(
+                      fontFamily: 'Gilroy',
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
+                      color: Default_Theme.accentLavender,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          const Text(
+            'TarangX recommendations are calculated 100% on-device using local listening signals. Zero history or personal data is transmitted to external servers.',
+            style: TextStyle(
+              fontFamily: 'Gilroy',
+              fontSize: 12,
+              height: 1.4,
+              color: Default_Theme.primaryColor2,
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            Navigator.pop(ctx);
+            context.read<RecommendationCubit>().dislikeTrack(song);
+            SnackbarService.showMessage('Will not recommend "${song.title}" again');
+          },
+          child: const Text(
+            "Don't recommend",
+            style: TextStyle(
+              color: Colors.redAccent,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Default_Theme.accentColor2,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Got it'),
+        ),
+      ],
+    ),
+  );
+}
+

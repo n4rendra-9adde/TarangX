@@ -379,3 +379,99 @@ class UserTasteProfile {
     );
   }
 }
+
+/// An artist recommended for discovery based on user affinities and context.
+class DiscoveryArtist {
+  final String name;
+  final String id;
+  final Artwork? thumbnail;
+  final String reason;
+
+  const DiscoveryArtist({
+    required this.name,
+    this.id = '',
+    this.thumbnail,
+    required this.reason,
+  });
+
+  @override
+  String toString() => 'DiscoveryArtist($name, reason: $reason)';
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DiscoveryArtist &&
+          runtimeType == other.runtimeType &&
+          name.toLowerCase().trim() == other.name.toLowerCase().trim();
+
+  @override
+  int get hashCode => name.toLowerCase().trim().hashCode;
+}
+
+/// Structured discovery collections derived from user signals and catalog data.
+class DiscoveryCollections {
+  final List<ScoredTrack> madeForYou;
+  final List<ScoredTrack> similarToFavorites;
+  final List<DiscoveryArtist> discoverArtists;
+  final List<ScoredTrack> rediscover;
+  final List<ScoredTrack> exploreByLanguage;
+  final bool isColdStart;
+
+  const DiscoveryCollections({
+    this.madeForYou = const [],
+    this.similarToFavorites = const [],
+    this.discoverArtists = const [],
+    this.rediscover = const [],
+    this.exploreByLanguage = const [],
+    this.isColdStart = false,
+  });
+
+  bool get isEmpty =>
+      madeForYou.isEmpty &&
+      similarToFavorites.isEmpty &&
+      discoverArtists.isEmpty &&
+      rediscover.isEmpty &&
+      exploreByLanguage.isEmpty;
+
+  List<Track> get allTracks => [
+        ...madeForYou.map((s) => s.track),
+        ...similarToFavorites.map((s) => s.track),
+        ...rediscover.map((s) => s.track),
+        ...exploreByLanguage.map((s) => s.track),
+      ];
+
+  /// Filters out any disliked tracks or blocked artists authoritatively across all collections.
+  DiscoveryCollections filterDisliked({
+    required Set<String> dislikedTrackIds,
+    required Set<String> dislikedArtistNames,
+  }) {
+    final dislikedArtistsLower = dislikedArtistNames
+        .map((a) => a.trim().toLowerCase())
+        .where((a) => a.isNotEmpty)
+        .toSet();
+
+    bool isExcluded(Track t) {
+      if (t.id.isEmpty || dislikedTrackIds.contains(t.id)) return true;
+      for (final artist in t.artists) {
+        if (dislikedArtistsLower.contains(artist.name.trim().toLowerCase())) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    return DiscoveryCollections(
+      madeForYou: madeForYou.where((s) => !isExcluded(s.track)).toList(),
+      similarToFavorites:
+          similarToFavorites.where((s) => !isExcluded(s.track)).toList(),
+      discoverArtists: discoverArtists
+          .where((a) => !dislikedArtistsLower.contains(a.name.trim().toLowerCase()))
+          .toList(),
+      rediscover: rediscover.where((s) => !isExcluded(s.track)).toList(),
+      exploreByLanguage:
+          exploreByLanguage.where((s) => !isExcluded(s.track)).toList(),
+      isColdStart: isColdStart,
+    );
+  }
+}
+

@@ -19,7 +19,9 @@ import 'package:Bloomee/screens/screen/home_views/recents_view.dart';
 import 'package:Bloomee/screens/screen/home_views/setting_views/about.dart';
 import 'package:Bloomee/screens/widgets/more_bottom_sheet.dart';
 import 'package:Bloomee/screens/widgets/sign_board_widget.dart';
+import 'package:Bloomee/screens/widgets/snackbar.dart';
 import 'package:Bloomee/screens/widgets/song_tile.dart';
+import 'package:Bloomee/services/recommendation/models/recommendation_models.dart';
 import 'package:Bloomee/utils/load_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -598,7 +600,7 @@ class NotificationIcon extends StatelessWidget {
       builder: (context, state) {
         final count =
             (state is! NotificationInitial) ? state.notifications.length : 0;
-        final iconWidget = const Icon(
+        const iconWidget = Icon(
           MingCute.notification_line,
           color: Default_Theme.primaryColor1,
           size: 19.0,
@@ -781,9 +783,9 @@ class ContinueListeningCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Row(
+                      const Row(
                         mainAxisSize: MainAxisSize.min,
-                        children: const [
+                        children: [
                           Icon(
                             MingCute.music_2_fill,
                             size: 13,
@@ -944,11 +946,11 @@ class _EmptyRecentCard extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 14),
-          Expanded(
+          const Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
-              children: const [
+              children: [
                 Text(
                   'Welcome to TarangX',
                   style: TextStyle(
@@ -1874,6 +1876,68 @@ class _LanguagePlaylistCardState extends State<_LanguagePlaylistCard> {
 class _PersonalizedRecommendationsSection extends StatelessWidget {
   const _PersonalizedRecommendationsSection();
 
+  Widget _buildCollectionWidget({
+    required BuildContext context,
+    required String title,
+    required String category,
+    required String subtitle,
+    required List<ScoredTrack> tracks,
+  }) {
+    if (tracks.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 10.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 8, 16, 2),
+            child: Text(
+              subtitle,
+              style: TextStyle(
+                fontFamily: 'Gilroy',
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: Default_Theme.primaryColor2.withValues(alpha: 0.8),
+              ),
+            ),
+          ),
+          TabSongListWidget(
+            list: tracks.map((scored) {
+              final song = scored.track;
+              final reason = scored.reason.description;
+              final sub = '${song.artists.map((a) => a.name).join(", ")} • $reason';
+
+              return SongCardWidget(
+                song: song,
+                subtitleOverride: sub,
+                onTap: () {
+                  final allTracks = tracks.map((s) => s.track).toList();
+                  context.read<TarangXPlayerCubit>().tarangXPlayer.loadPlaylist(
+                        Playlist(
+                          tracks: allTracks,
+                          title: title,
+                        ),
+                        idx: allTracks.indexOf(song),
+                        doPlay: true,
+                      );
+                },
+                onOptionsTap: () => showMoreBottomSheet(
+                  context,
+                  song,
+                  showSinglePlay: true,
+                  recommendationReason: scored.reason,
+                ),
+              );
+            }).toList(),
+            category: category,
+            columnSize: 3,
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return BlocBuilder<RecommendationCubit, RecommendationState>(
@@ -1894,131 +1958,196 @@ class _PersonalizedRecommendationsSection extends StatelessWidget {
           );
         }
 
-        if (state is RecommendationLoaded && state.recommendedTracks.isNotEmpty) {
-          final isCold = state.isColdStart;
-          final title = isCold ? 'Featured Picks' : 'Recommended for You';
-          final category = isCold ? 'Featured' : 'For You';
+        if (state is RecommendationLoaded) {
+          final collections = state.collections;
+          if (collections.isEmpty) {
+            return const _EmptyDiscoveryCard();
+          }
 
-          return Padding(
-            padding: const EdgeInsets.only(top: 12.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(
+          final isCold = collections.isColdStart;
+          final madeForYouTitle = isCold ? 'Featured Picks' : 'Made for You';
+          final madeForYouCategory = isCold ? 'Featured' : 'For You';
+          final madeForYouSubtitle = isCold
+              ? 'Popular tracks to get started'
+              : 'Ranked for your listening preferences';
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Global Discovery Header
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 16, 16, 4),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            gradient: Default_Theme.brandGradient,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(
                             MingCute.sparkles_fill,
-                            size: 18,
-                            color: Default_Theme.accentColor2,
+                            size: 16,
+                            color: Colors.white,
                           ),
-                          const SizedBox(width: 8),
-                          Text(
-                            title,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: Default_Theme.primaryColor1,
-                            ),
-                          ),
-                        ],
-                      ),
-                      IconButton(
-                        icon: const Icon(
-                          MingCute.refresh_3_line,
-                          size: 18,
-                          color: Default_Theme.primaryColor2,
                         ),
-                        tooltip: 'Refresh recommendations',
-                        onPressed: () {
-                          HapticFeedback.lightImpact();
-                          context.read<RecommendationCubit>().loadRecommendations();
-                        },
+                        const SizedBox(width: 10),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Personalized Discovery',
+                              style: TextStyle(
+                                fontFamily: 'Gilroy',
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800,
+                                color: Default_Theme.primaryColor1,
+                                letterSpacing: -0.3,
+                              ),
+                            ),
+                            Text(
+                              'Private on-device recommendations',
+                              style: TextStyle(
+                                fontFamily: 'Gilroy',
+                                fontSize: 11.5,
+                                color: Default_Theme.primaryColor2.withValues(alpha: 0.75),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    IconButton(
+                      icon: const Icon(
+                        MingCute.refresh_3_line,
+                        size: 19,
+                        color: Default_Theme.accentLavender,
+                      ),
+                      tooltip: 'Refresh recommendations',
+                      onPressed: () {
+                        HapticFeedback.lightImpact();
+                        context.read<RecommendationCubit>().loadRecommendations();
+                      },
+                    ),
+                  ],
+                ),
+              ),
+
+              // 1. Made for You Collection
+              _buildCollectionWidget(
+                context: context,
+                title: madeForYouTitle,
+                category: madeForYouCategory,
+                subtitle: madeForYouSubtitle,
+                tracks: collections.madeForYou,
+              ),
+
+              // 2. Discover Artists Collection
+              if (collections.discoverArtists.isNotEmpty) ...[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 14, 16, 6),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 3.5,
+                        height: 18,
+                        decoration: BoxDecoration(
+                          color: Default_Theme.accentColor2,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'Discover Artists',
+                          style: TextStyle(
+                            fontFamily: 'Gilroy',
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                            color: Default_Theme.primaryColor1,
+                            letterSpacing: -0.3,
+                          ),
+                        ),
                       ),
                     ],
                   ),
                 ),
-                if (state.topArtists.isNotEmpty && !isCold)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 16, bottom: 8),
-                    child: SizedBox(
-                      height: 32,
-                      child: ListView.separated(
-                        scrollDirection: Axis.horizontal,
-                        itemCount: state.topArtists.length,
-                        separatorBuilder: (_, __) => const SizedBox(width: 8),
-                        itemBuilder: (context, idx) {
-                          final artist = state.topArtists[idx];
-                          return Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: Default_Theme.primaryColor1.withValues(alpha: 0.06),
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(
-                                color: Default_Theme.accentColor2.withValues(alpha: 0.25),
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(
-                                  MingCute.user_star_line,
-                                  size: 13,
-                                  color: Default_Theme.accentColor2,
-                                ),
-                                const SizedBox(width: 5),
-                                Text(
-                                  artist,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Default_Theme.primaryColor1.withValues(alpha: 0.85),
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 0, 16, 8),
+                  child: Text(
+                    'Artists related to your established listening taste',
+                    style: TextStyle(
+                      fontFamily: 'Gilroy',
+                      fontSize: 12,
+                      color: Default_Theme.primaryColor2.withValues(alpha: 0.8),
                     ),
                   ),
-                TabSongListWidget(
-                  list: state.recommendedTracks.map((scored) {
-                    final song = scored.track;
-                    final reason = scored.reason.description;
-                    final subtitle = '${song.artists.map((a) => a.name).join(", ")} • $reason';
-
-                    return SongCardWidget(
-                      song: song,
-                      subtitleOverride: subtitle,
-                      onTap: () {
-                        final tracks = state.recommendedTracks.map((s) => s.track).toList();
-                        context.read<TarangXPlayerCubit>().tarangXPlayer.loadPlaylist(
-                              Playlist(
-                                tracks: tracks,
-                                title: title,
-                              ),
-                              idx: tracks.indexOf(song),
-                              doPlay: true,
-                            );
-                      },
-                      onOptionsTap: () => showMoreBottomSheet(
-                        context,
-                        song,
-                        showSinglePlay: true,
-                      ),
-                    );
-                  }).toList(),
-                  category: category,
-                  columnSize: 3,
+                ),
+                SizedBox(
+                  height: 156,
+                  child: ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    itemCount: collections.discoverArtists.length,
+                    itemBuilder: (context, idx) {
+                      final artist = collections.discoverArtists[idx];
+                      return _DiscoverArtistCard(
+                        artist: artist,
+                        onTap: () {
+                          context.read<TarangXPlayerCubit>().tarangXPlayer.startRadioFromArtist(
+                                ArtistSummary(
+                                  id: artist.id,
+                                  name: artist.name,
+                                  thumbnail: artist.thumbnail,
+                                ),
+                              );
+                          SnackbarService.showMessage('Starting Infinite Radio for "${artist.name}"');
+                        },
+                        onDislike: () {
+                          context.read<RecommendationCubit>().dislikeArtist(artist.name);
+                          SnackbarService.showMessage('Will not recommend "${artist.name}" again');
+                        },
+                      );
+                    },
+                  ),
                 ),
               ],
-            ),
+
+              // 3. Similar to Your Favorites Collection
+              _buildCollectionWidget(
+                context: context,
+                title: 'Similar to Your Favorites',
+                category: 'Favorites',
+                subtitle: 'Inspired by the songs and artists you love',
+                tracks: collections.similarToFavorites,
+              ),
+
+              // 4. Rediscover Collection
+              _buildCollectionWidget(
+                context: context,
+                title: 'Rediscover',
+                category: 'Rediscover',
+                subtitle: 'Past favorites you haven\'t heard in a while',
+                tracks: collections.rediscover,
+              ),
+
+              // 5. Explore by Language Collection
+              _buildCollectionWidget(
+                context: context,
+                title: 'Explore by Language',
+                category: 'Languages',
+                subtitle: 'Fresh trending tracks in your configured languages',
+                tracks: collections.exploreByLanguage,
+              ),
+            ],
           );
+        }
+
+        if (state is RecommendationEmpty) {
+          return const _EmptyDiscoveryCard();
         }
 
         return const SizedBox.shrink();
@@ -2026,5 +2155,318 @@ class _PersonalizedRecommendationsSection extends StatelessWidget {
     );
   }
 }
+
+class _EmptyDiscoveryCard extends StatelessWidget {
+  const _EmptyDiscoveryCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+      decoration: BoxDecoration(
+        color: Default_Theme.surface.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Default_Theme.surfaceBorderSubtle,
+          width: 1,
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: Default_Theme.accentColor2.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Center(
+              child: Icon(
+                MingCute.sparkles_line,
+                size: 22,
+                color: Default_Theme.accentLavender,
+              ),
+            ),
+          ),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'No Recommendations Yet',
+                  style: TextStyle(
+                    fontFamily: 'Gilroy',
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: Default_Theme.primaryColor1,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  'Play more songs to build your personalized discovery mixes.',
+                  style: TextStyle(
+                    fontFamily: 'Gilroy',
+                    fontSize: 12,
+                    fontWeight: FontWeight.w400,
+                    color: Default_Theme.primaryColor2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(
+              MingCute.refresh_3_line,
+              size: 18,
+              color: Default_Theme.primaryColor2,
+            ),
+            tooltip: 'Refresh',
+            onPressed: () {
+              HapticFeedback.lightImpact();
+              context.read<RecommendationCubit>().loadRecommendations();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DiscoverArtistCard extends StatefulWidget {
+  final DiscoveryArtist artist;
+  final VoidCallback onTap;
+  final VoidCallback onDislike;
+
+  const _DiscoverArtistCard({
+    required this.artist,
+    required this.onTap,
+    required this.onDislike,
+  });
+
+  @override
+  State<_DiscoverArtistCard> createState() => _DiscoverArtistCardState();
+}
+
+class _DiscoverArtistCardState extends State<_DiscoverArtistCard> {
+  bool _isHovering = false;
+
+  void _showArtistBottomSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => Container(
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: Default_Theme.themeColor,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Default_Theme.surfaceBorderSubtle),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.4),
+              blurRadius: 16,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Default_Theme.accentColor2.withValues(alpha: 0.4),
+                      ),
+                    ),
+                    child: ClipOval(
+                      child: widget.artist.thumbnail != null
+                          ? LoadImageCached(
+                              imageUrl: widget.artist.thumbnail!.url,
+                              fallbackUrl: widget.artist.thumbnail!.url,
+                              fit: BoxFit.cover,
+                            )
+                          : const Icon(MingCute.user_star_line,
+                              color: Default_Theme.accentLavender),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.artist.name,
+                          style: const TextStyle(
+                            fontFamily: 'Gilroy',
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: Default_Theme.primaryColor1,
+                          ),
+                        ),
+                        Text(
+                          widget.artist.reason,
+                          style: TextStyle(
+                            fontFamily: 'Gilroy',
+                            fontSize: 12,
+                            color: Default_Theme.accentLavender.withValues(alpha: 0.9),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(color: Default_Theme.surfaceBorderSubtle),
+            ListTile(
+              leading: const Icon(MingCute.radio_line,
+                  color: Default_Theme.accentLavender),
+              title: Text('Start Radio for ${widget.artist.name}'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                widget.onTap();
+              },
+            ),
+            ListTile(
+              leading: const Icon(MingCute.eye_close_line,
+                  color: Colors.redAccent),
+              title: Text("Don't recommend ${widget.artist.name}"),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                widget.onDislike();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 12),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _isHovering = true),
+        onExit: (_) => setState(() => _isHovering = false),
+        child: GestureDetector(
+          onTap: () {
+            HapticFeedback.lightImpact();
+            widget.onTap();
+          },
+          onLongPress: () => _showArtistBottomSheet(context),
+          onSecondaryTap: () => _showArtistBottomSheet(context),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: 130,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+            decoration: BoxDecoration(
+              color: _isHovering
+                  ? Default_Theme.surfaceElevated
+                  : Default_Theme.surface.withValues(alpha: 0.45),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: _isHovering
+                    ? Default_Theme.accentColor2.withValues(alpha: 0.4)
+                    : Default_Theme.surfaceBorderSubtle,
+                width: 1,
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Stack(
+                  children: [
+                    Container(
+                      width: 66,
+                      height: 66,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Default_Theme.accentColor2.withValues(alpha: 0.3),
+                          width: 1.5,
+                        ),
+                      ),
+                      child: ClipOval(
+                        child: widget.artist.thumbnail != null
+                            ? LoadImageCached(
+                                imageUrl: widget.artist.thumbnail!.url,
+                                fallbackUrl: widget.artist.thumbnail!.url,
+                                fit: BoxFit.cover,
+                              )
+                            : Container(
+                                color: Default_Theme.surfaceElevated,
+                                child: const Icon(
+                                  MingCute.user_star_line,
+                                  size: 26,
+                                  color: Default_Theme.accentLavender,
+                                ),
+                              ),
+                      ),
+                    ),
+                    Positioned(
+                      bottom: 0,
+                      right: 0,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: const BoxDecoration(
+                          gradient: Default_Theme.brandGradient,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          MingCute.radio_line,
+                          size: 10,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  widget.artist.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontFamily: 'Gilroy',
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: Default_Theme.primaryColor1,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  widget.artist.reason,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontFamily: 'Gilroy',
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w500,
+                    color: Default_Theme.accentLavender.withValues(alpha: 0.9),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 
 

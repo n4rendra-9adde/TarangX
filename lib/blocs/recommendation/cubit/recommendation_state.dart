@@ -13,20 +13,38 @@ class RecommendationInitial extends RecommendationState {}
 class RecommendationLoading extends RecommendationState {}
 
 class RecommendationLoaded extends RecommendationState {
-  final List<ScoredTrack> recommendedTracks;
-  final List<ScoredTrack> similarTracks;
-  final List<String> topArtists;
-  final bool isColdStart;
+  final DiscoveryCollections collections;
+
+  List<ScoredTrack> get recommendedTracks => collections.madeForYou;
+  List<ScoredTrack> get similarTracks => collections.similarToFavorites;
+  List<String> get topArtists =>
+      collections.discoverArtists.map((a) => a.name).toList();
+  bool get isColdStart => collections.isColdStart;
 
   const RecommendationLoaded({
-    required this.recommendedTracks,
-    this.similarTracks = const [],
-    this.topArtists = const [],
-    this.isColdStart = false,
+    required this.collections,
   });
 
+  factory RecommendationLoaded.legacy({
+    required List<ScoredTrack> recommendedTracks,
+    List<ScoredTrack> similarTracks = const [],
+    List<String> topArtists = const [],
+    bool isColdStart = false,
+  }) {
+    return RecommendationLoaded(
+      collections: DiscoveryCollections(
+        madeForYou: recommendedTracks,
+        similarToFavorites: similarTracks,
+        discoverArtists: topArtists
+            .map((name) => DiscoveryArtist(name: name, reason: 'Top artist'))
+            .toList(),
+        isColdStart: isColdStart,
+      ),
+    );
+  }
+
   @override
-  List<Object?> get props => [recommendedTracks, similarTracks, topArtists, isColdStart];
+  List<Object?> get props => [collections];
 }
 
 class RecommendationEmpty extends RecommendationState {

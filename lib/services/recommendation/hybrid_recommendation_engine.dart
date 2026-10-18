@@ -41,10 +41,13 @@ class HybridRecommendationEngine {
         _pluginService = pluginService,
         _config = config;
 
-  /// Generate personalized recommendations for the user.
-  Future<List<ScoredTrack>> getRecommendations({
-    int limit = 15,
-    Track? currentTrack,
+  /// Generate structured discovery collections across Made for You,
+  /// Similar to Your Favorites, Discover Artists, Rediscover, and Explore by Language.
+  /// Strictly guarantees 0% cross-collection track duplication and authoritative
+  /// enforcement of explicit dislikes and blocked artists.
+  Future<DiscoveryCollections> getDiscoveryCollections({
+    Track? seedTrack,
+    int limitPerCollection = 8,
   }) async {
     final profile = _signalCollector.currentProfile;
     final userLanguages = await _getUserMusicLanguages();
@@ -53,49 +56,294 @@ class HybridRecommendationEngine {
     final candidatePool = await _gatherCandidatePool(
       profile: profile,
       userLanguages: userLanguages,
-      seedTrack: currentTrack,
+      seedTrack: seedTrack,
     );
 
     if (candidatePool.isEmpty) {
-      log('No recommendation candidates available', name: 'HybridRecommendationEngine');
-      return [];
+      log('No recommendation candidates available for discovery',
+          name: 'HybridRecommendationEngine');
+      return DiscoveryCollections(isColdStart: profile.isColdStart);
     }
 
     // 2. Filter out explicit dislikes, blocked artists, and malformed tracks
     final validCandidates = _filterCandidates(candidatePool, profile);
 
-    // 3. Compute deterministic scores and explainability reasons
-    final scoredList = <ScoredTrack>[];
+    // Track duplicate suppression across collections
+    final seenTrackIds = <String>{};
+    final seenNormalizedTitles = <String>{};
+
+    bool isDuplicate(Track track) {
+      if (track.id.isEmpty || track.title.trim().isEmpty) return true;
+      if (seenTrackIds.contains(track.id)) return true;
+      final primaryArtist = track.artists.isNotEmpty
+          ? track.artists.first.name.trim().toLowerCase()
+          : '';
+      final normKey = '${track.title.trim().toLowerCase()}__$primaryArtist';
+      if (seenNormalizedTitles.contains(normKey)) return true;
+      return false;
+    }
+
+    void markSeen(Track track) {
+      seenTrackIds.add(track.id);
+      final primaryArtist = track.artists.isNotEmpty
+          ? track.artists.first.name.trim().toLowerCase()
+          : '';
+      final normKey = '${track.title.trim().toLowerCase()}__$primaryArtist';
+      seenNormalizedTitles.add(normKey);
+    }
+
+    // ── Collection 1: Made for You ──────────────────────────────
+    final scoredAll = <ScoredTrack>[];
     for (final candidate in validCandidates) {
       final scored = scoreCandidate(
         candidate: candidate,
         profile: profile,
-        seedTrack: currentTrack,
+        seedTrack: seedTrack,
         userLanguages: userLanguages,
       );
       if (scored.score > 0.0) {
-        scoredList.add(scored);
+        scoredAll.add(scored);
+      }
+    }
+    scoredAll.sort((a, b) => b.score.compareTo(a.score));
+
+    final madeForYou = <ScoredTrack>[];
+    final madeForYouArtistCounts = <String, int>{};
+    for (final st in scoredAll) {
+      if (isDuplicate(st.track)) continue;
+      final primary = st.track.artists.isNotEmpty
+          ? st.track.artists.first.name.trim().toLowerCase()
+          : 'unknown';
+      if ((madeForYouArtistCounts[primary] ?? 0) >= _config.maxTracksPerArtist) {
+        continue;
+      }
+      madeForYou.add(st);
+      madeForYouArtistCounts[primary] = (madeForYouArtistCounts[primary] ?? 0) + 1;
+      markSeen(st.track);
+      if (madeForYou.length >= limitPerCollection) break;
+    }
+
+    // ── Collection 2: Similar to Your Favorites ─────────────────
+    final similarToFavorites = <ScoredTrack>[];
+    if (profile.likedTrackIds.isNotEmpty || profile.artistAffinities.isNotEmpty) {
+      List<Track> likedTracks = [];
+      try {
+        final likedPlaylist =
+            await _playlistDao.loadPlaylist(PlaylistDAO.likedPlaylist);
+        likedTracks = likedPlaylist.tracks
+            .where((t) => !isTrackExcluded(t, profile))
+            .toList();
+      } catch (_) {}
+
+      final favArtists = <String>{};
+      for (final t in likedTracks) {
+        for (final a in t.artists) {
+          final clean = a.name.trim().toLowerCase();
+          if (clean.isNotEmpty) favArtists.add(clean);
+        }
+      }
+      for (final entry in profile.artistAffinities.entries) {
+        if (entry.value >= 0.3) {
+          favArtists.add(entry.key.trim().toLowerCase());
+        }
+      }
+
+      if (favArtists.isNotEmpty) {
+        final similarScored = <ScoredTrack>[];
+        for (final candidate in validCandidates) {
+          if (isDuplicate(candidate)) continue;
+          if (profile.likedTrackIds.contains(candidate.id)) continue;
+
+          final matchesArtist = candidate.artists.any(
+            (a) => favArtists.contains(a.name.trim().toLowerCase()),
+          );
+
+          if (matchesArtist) {
+            final matchingArtist = candidate.artists.firstWhere(
+              (a) => favArtists.contains(a.name.trim().toLowerCase()),
+            );
+            final score = scoreCandidate(
+              candidate: candidate,
+              profile: profile,
+              seedTrack: seedTrack,
+              userLanguages: userLanguages,
+            );
+            similarScored.add(ScoredTrack(
+              track: candidate,
+              score: score.score,
+              reason: RecommendationReason.artistAffinity(matchingArtist.name),
+              subScores: score.subScores,
+            ));
+          }
+        }
+
+        similarScored.sort((a, b) => b.score.compareTo(a.score));
+        final simArtistCounts = <String, int>{};
+        for (final st in similarScored) {
+          if (isDuplicate(st.track)) continue;
+          final primary = st.track.artists.isNotEmpty
+              ? st.track.artists.first.name.trim().toLowerCase()
+              : 'unknown';
+          if ((simArtistCounts[primary] ?? 0) >= _config.maxTracksPerArtist) {
+            continue;
+          }
+          similarToFavorites.add(st);
+          simArtistCounts[primary] = (simArtistCounts[primary] ?? 0) + 1;
+          markSeen(st.track);
+          if (similarToFavorites.length >= limitPerCollection) break;
+        }
       }
     }
 
-    // Sort by score descending
-    scoredList.sort((a, b) => b.score.compareTo(a.score));
+    // ── Collection 3: Discover Artists ──────────────────────────
+    final discoverArtists = <DiscoveryArtist>[];
+    if (!profile.isColdStart || userLanguages.isNotEmpty) {
+      final dislikedArtistsLower = profile.dislikedArtistNames
+          .map((a) => a.trim().toLowerCase())
+          .toSet();
 
-    // 4. Enforce catalog diversity (limit tracks per artist to prevent saturation)
-    final diversified = _applyDiversityAndDeduplication(
-      scoredList,
-      maxPerArtist: _config.maxTracksPerArtist,
-      limit: limit,
+      final seenArtistNames = <String>{};
+      for (final entry in profile.artistAffinities.entries) {
+        if (entry.value > 0.4) {
+          seenArtistNames.add(entry.key.trim().toLowerCase());
+        }
+      }
+
+      for (final candidate in validCandidates) {
+        for (final artist in candidate.artists) {
+          final clean = artist.name.trim().toLowerCase();
+          if (clean.isEmpty) continue;
+          if (dislikedArtistsLower.contains(clean)) continue;
+          if (seenArtistNames.contains(clean)) continue;
+
+          seenArtistNames.add(clean);
+          final lang = _trackLanguageMap[candidate.id];
+          final reasonStr = lang != null && userLanguages.contains(lang)
+              ? 'Trending in $lang'
+              : 'Related to your listening';
+
+          discoverArtists.add(DiscoveryArtist(
+            name: artist.name,
+            id: artist.id,
+            thumbnail: candidate.thumbnail,
+            reason: reasonStr,
+          ));
+
+          if (discoverArtists.length >= 8) break;
+        }
+        if (discoverArtists.length >= 8) break;
+      }
+    }
+
+    // ── Collection 4: Rediscover ────────────────────────────────
+    final rediscover = <ScoredTrack>[];
+    if (!profile.isColdStart) {
+      List<Track> historyTracks = [];
+      try {
+        historyTracks = await _historyDao.getHistory(limit: 60);
+      } catch (_) {}
+
+      final now = DateTime.now();
+      final rediscoverCandidates = <Track>[];
+      for (final track in historyTracks) {
+        if (isDuplicate(track)) continue;
+        if (isTrackExcluded(track, profile)) continue;
+
+        final lastPlayed = profile.lastPlayedTimestamps[track.id];
+        if (lastPlayed != null) {
+          final diffHours = now.difference(lastPlayed).inHours;
+          if (diffHours < 48) continue;
+        } else {
+          final idx = historyTracks.indexOf(track);
+          if (idx < 10) continue;
+        }
+
+        rediscoverCandidates.add(track);
+      }
+
+      final rediscoverScored = rediscoverCandidates.map((c) {
+        final recScore = _calculateRecencyScore(c, profile);
+        final plays = profile.trackPlayCounts[c.id] ?? 1;
+        final completions = profile.trackCompletionCounts[c.id] ?? 0;
+        final completionBonus = plays > 0 ? (completions / plays) * 0.3 : 0.0;
+        return ScoredTrack(
+          track: c,
+          score: (recScore * 0.7) + completionBonus,
+          reason: const RecommendationReason(
+            type: RecommendationReasonType.recentListening,
+            description: 'Rediscover • From your past listening',
+          ),
+        );
+      }).toList();
+
+      rediscoverScored.sort((a, b) => b.score.compareTo(a.score));
+      final rediscArtistCounts = <String, int>{};
+      for (final st in rediscoverScored) {
+        if (isDuplicate(st.track)) continue;
+        final primary = st.track.artists.isNotEmpty
+            ? st.track.artists.first.name.trim().toLowerCase()
+            : 'unknown';
+        if ((rediscArtistCounts[primary] ?? 0) >= _config.maxTracksPerArtist) {
+          continue;
+        }
+        rediscover.add(st);
+        rediscArtistCounts[primary] = (rediscArtistCounts[primary] ?? 0) + 1;
+        markSeen(st.track);
+        if (rediscover.length >= limitPerCollection) break;
+      }
+    }
+
+    // ── Collection 5: Explore by Language ───────────────────────
+    final exploreByLanguage = <ScoredTrack>[];
+    final langCandidates = validCandidates.where((c) {
+      if (isDuplicate(c)) return false;
+      final lang = _trackLanguageMap[c.id];
+      return lang != null && userLanguages.contains(lang);
+    }).toList();
+
+    for (final c in langCandidates) {
+      final lang = _trackLanguageMap[c.id]!;
+      exploreByLanguage.add(ScoredTrack(
+        track: c,
+        score: 0.85,
+        reason: RecommendationReason.languageTrending(lang),
+      ));
+      markSeen(c);
+      if (exploreByLanguage.length >= limitPerCollection) break;
+    }
+
+    return DiscoveryCollections(
+      madeForYou: madeForYou,
+      similarToFavorites: similarToFavorites,
+      discoverArtists: discoverArtists,
+      rediscover: rediscover,
+      exploreByLanguage: exploreByLanguage,
+      isColdStart: profile.isColdStart,
+    );
+  }
+
+  /// Generate personalized recommendations for the user.
+  Future<List<ScoredTrack>> getRecommendations({
+    int limit = 15,
+    Track? currentTrack,
+  }) async {
+    final collections = await getDiscoveryCollections(
+      seedTrack: currentTrack,
+      limitPerCollection: limit,
     );
 
-    // 5. Final exclusion guarantee: strictly ensure no disliked track or blocked artist is emitted
-    final finalRecommendations = diversified
-        .where((st) => !isTrackExcluded(st.track, profile) && st.score > 0.0)
-        .toList();
+    final combined = <ScoredTrack>[
+      ...collections.madeForYou,
+      ...collections.similarToFavorites,
+      ...collections.rediscover,
+      ...collections.exploreByLanguage,
+    ];
 
-    log('Generated ${finalRecommendations.length} personalized recommendations',
-        name: 'HybridRecommendationEngine');
-    return finalRecommendations;
+    if (combined.isNotEmpty) {
+      return combined.take(limit).toList();
+    }
+
+    return [];
   }
 
   /// Generate similar tracks for a specific reference track (e.g. Now Playing).
@@ -557,7 +805,7 @@ class HybridRecommendationEngine {
     // Artist affinity bonus
     double maxArtistAffinity = 0.0;
     for (final artist in candidate.artists) {
-      final affinity = profile.artistAffinities[artist.name.trim()] ?? 0.0;
+      final affinity = _getArtistAffinity(profile, artist.name);
       if (affinity > maxArtistAffinity) maxArtistAffinity = affinity;
     }
     // Normalize affinity logarithmically to [0.0, 0.40]
@@ -707,7 +955,7 @@ class HybridRecommendationEngine {
     // Artist affinity check
     for (final artist in candidate.artists) {
       final name = artist.name.trim();
-      final affinity = profile.artistAffinities[name] ?? 0.0;
+      final affinity = _getArtistAffinity(profile, name);
       if (affinity >= 0.5) {
         return RecommendationReason.artistAffinity(name);
       }
@@ -727,6 +975,20 @@ class HybridRecommendationEngine {
 
     final topArtist = candidate.artists.isNotEmpty ? candidate.artists.first.name : null;
     return RecommendationReason.recentListening(topArtist);
+  }
+
+  double _getArtistAffinity(UserTasteProfile profile, String artistName) {
+    final clean = artistName.trim();
+    if (clean.isEmpty) return 0.0;
+    final direct = profile.artistAffinities[clean];
+    if (direct != null) return direct;
+    final cleanLower = clean.toLowerCase();
+    for (final entry in profile.artistAffinities.entries) {
+      if (entry.key.trim().toLowerCase() == cleanLower) {
+        return entry.value;
+      }
+    }
+    return 0.0;
   }
 
   Future<List<String>> _getUserMusicLanguages() async {

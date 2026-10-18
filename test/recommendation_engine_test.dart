@@ -808,5 +808,247 @@ void main() {
       expect(recommendations.first.reason.type, equals(RecommendationReasonType.coldStart));
     });
   });
+
+  group('Personalized Discovery Collections & Feedback (Task 9)', () {
+    late HybridRecommendationEngine engine;
+    late FakeHistoryDAO fakeHistoryDao;
+    late FakePlaylistDAO fakePlaylistDao;
+    late FakeDownloadDAO fakeDownloadDao;
+    late FakeSettingsDAO fakeSettingsDao;
+    late FakePluginService fakePluginService;
+    late ListeningSignalCollector signalCollector;
+
+    setUp(() {
+      fakeHistoryDao = FakeHistoryDAO();
+      fakePlaylistDao = FakePlaylistDAO();
+      fakeDownloadDao = FakeDownloadDAO();
+      fakeSettingsDao = FakeSettingsDAO();
+      fakePluginService = FakePluginService();
+
+      fakeSettingsDao.stringSettings[SettingKeys.musicLanguages] = 'Hindi,English';
+
+      signalCollector = ListeningSignalCollector(
+        settingsDao: fakeSettingsDao,
+        historyDao: fakeHistoryDao,
+        playlistDao: fakePlaylistDao,
+      );
+
+      engine = HybridRecommendationEngine(
+        signalCollector: signalCollector,
+        historyDao: fakeHistoryDao,
+        playlistDao: fakePlaylistDao,
+        downloadDao: fakeDownloadDao,
+        settingsDao: fakeSettingsDao,
+        pluginService: fakePluginService,
+      );
+    });
+
+    test('getDiscoveryCollections ensures 0% duplicate tracks across all collections', () async {
+      const t1 = Track(
+        id: 'track-1',
+        title: 'Song One',
+        artists: [ArtistSummary(id: 'a1', name: 'Artist One')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+      const t2 = Track(
+        id: 'track-2',
+        title: 'Song Two',
+        artists: [ArtistSummary(id: 'a2', name: 'Artist Two')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+      const t3 = Track(
+        id: 'track-3',
+        title: 'Song Three',
+        artists: [ArtistSummary(id: 'a1', name: 'Artist One')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+
+      fakeHistoryDao.historyTracks = [t1, t2, t3];
+      fakePlaylistDao.likedTracks = [t1];
+
+      // Simulate past listening signal on t1
+      signalCollector.onTrackStarted(t1);
+      signalCollector.onPositionUpdate(const Duration(minutes: 3), const Duration(minutes: 3));
+
+      final collections = await engine.getDiscoveryCollections();
+
+      // Collect all track IDs in each collection
+      final madeForYouIds = collections.madeForYou.map((s) => s.track.id).toSet();
+      final similarIds = collections.similarToFavorites.map((s) => s.track.id).toSet();
+      final rediscoverIds = collections.rediscover.map((s) => s.track.id).toSet();
+      final languageIds = collections.exploreByLanguage.map((s) => s.track.id).toSet();
+
+      // Verify mutual exclusivity (0% duplicates)
+      expect(madeForYouIds.intersection(similarIds), isEmpty);
+      expect(madeForYouIds.intersection(rediscoverIds), isEmpty);
+      expect(madeForYouIds.intersection(languageIds), isEmpty);
+      expect(similarIds.intersection(rediscoverIds), isEmpty);
+      expect(similarIds.intersection(languageIds), isEmpty);
+      expect(rediscoverIds.intersection(languageIds), isEmpty);
+    });
+
+    test('Collections strictly enforce explicit dislikes and blocked artists', () async {
+      const goodTrack = Track(
+        id: 'good-track',
+        title: 'Good Track',
+        artists: [ArtistSummary(id: 'a1', name: 'Beloved Artist')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+      const dislikedTrack = Track(
+        id: 'bad-track',
+        title: 'Annoying Track',
+        artists: [ArtistSummary(id: 'a1', name: 'Beloved Artist')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+      const blockedArtistTrack = Track(
+        id: 'blocked-track',
+        title: 'Other Track',
+        artists: [ArtistSummary(id: 'a2', name: 'Banned Artist')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+
+      fakeHistoryDao.historyTracks = [goodTrack, dislikedTrack, blockedArtistTrack];
+
+      // Dislike bad-track and ban Banned Artist
+      signalCollector.onTrackDisliked(dislikedTrack);
+      signalCollector.onArtistDisliked('Banned Artist');
+
+      final collections = await engine.getDiscoveryCollections();
+
+      final allIds = collections.allTracks.map((t) => t.id).toSet();
+      expect(allIds, contains('good-track'));
+      expect(allIds, isNot(contains('bad-track')));
+      expect(allIds, isNot(contains('blocked-track')));
+
+      // Discover artists must also exclude Banned Artist
+      final discoverArtistNames = collections.discoverArtists
+          .map((a) => a.name.toLowerCase().trim())
+          .toSet();
+      expect(discoverArtistNames, isNot(contains('banned artist')));
+    });
+
+    test('Cold start shows Made for You and Language collections while hiding favorites/rediscover', () async {
+      // 0 history, 0 likes, 0 play counts
+      fakeHistoryDao.historyTracks = [];
+      fakePlaylistDao.likedTracks = [];
+
+      final collections = await engine.getDiscoveryCollections();
+
+      expect(collections.isColdStart, isTrue);
+      expect(collections.madeForYou, isNotEmpty); // Curated language picks
+      expect(collections.similarToFavorites, isEmpty); // Insufficient data -> hidden
+      expect(collections.rediscover, isEmpty); // Insufficient data -> hidden
+    });
+
+    test('Rediscover excludes tracks played within the last 48 hours', () async {
+      final now = DateTime.now();
+      const recentTrack = Track(
+        id: 'recent-1',
+        title: 'Just Played Yesterday',
+        artists: [ArtistSummary(id: 'a1', name: 'Artist A')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+      const oldTrack = Track(
+        id: 'old-1',
+        title: 'Played Last Week',
+        artists: [ArtistSummary(id: 'a2', name: 'Artist B')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+
+      fakeHistoryDao.historyTracks = [recentTrack, oldTrack];
+      signalCollector.onTrackStarted(recentTrack);
+      signalCollector.onTrackStarted(oldTrack);
+
+      // Manually set timestamp on oldTrack to 5 days ago and recentTrack to 5 hours ago
+      final updatedProfile = signalCollector.currentProfile.copyWith(
+        lastPlayedTimestamps: {
+          'recent-1': now.subtract(const Duration(hours: 5)),
+          'old-1': now.subtract(const Duration(days: 5)),
+        },
+        trackCompletionCounts: {
+          'old-1': 2,
+        },
+      );
+
+      // Save to DAO
+      await fakeSettingsDao.putSettingStr(
+        SettingKeys.recommendationTasteProfile,
+        updatedProfile.toJson(),
+      );
+
+      // Re-initialize collector with the timestamps
+      final collectorWithHistory = ListeningSignalCollector(
+        settingsDao: fakeSettingsDao,
+        historyDao: fakeHistoryDao,
+        playlistDao: fakePlaylistDao,
+      );
+      await pumpEventQueue();
+
+      final engineWithHistory = HybridRecommendationEngine(
+        signalCollector: collectorWithHistory,
+        historyDao: fakeHistoryDao,
+        playlistDao: fakePlaylistDao,
+        downloadDao: fakeDownloadDao,
+        settingsDao: fakeSettingsDao,
+        pluginService: fakePluginService,
+      );
+
+      final collections = await engineWithHistory.getDiscoveryCollections();
+
+      // Recent track should never be in rediscover
+      final rediscoverIds = collections.rediscover.map((s) => s.track.id).toSet();
+      expect(rediscoverIds, isNot(contains('recent-1')));
+    });
+
+    test('DiscoveryCollections filterDisliked purges tracks and artists immediately', () {
+      const t1 = Track(
+        id: 't1',
+        title: 'Track 1',
+        artists: [ArtistSummary(id: 'a1', name: 'Artist 1')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+      const t2 = Track(
+        id: 't2',
+        title: 'Track 2',
+        artists: [ArtistSummary(id: 'a2', name: 'Artist 2')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+
+      const collections = DiscoveryCollections(
+        madeForYou: [
+          ScoredTrack(track: t1, score: 0.9, reason: RecommendationReason(type: RecommendationReasonType.coldStart, description: ''))
+        ],
+        similarToFavorites: [
+          ScoredTrack(track: t2, score: 0.8, reason: RecommendationReason(type: RecommendationReasonType.coldStart, description: ''))
+        ],
+        discoverArtists: [
+          DiscoveryArtist(name: 'Artist 1', reason: 'Discovered'),
+          DiscoveryArtist(name: 'Artist 2', reason: 'Trending'),
+        ],
+      );
+
+      // Filter out t1 and Artist 2
+      final filtered = collections.filterDisliked(
+        dislikedTrackIds: {'t1'},
+        dislikedArtistNames: {'Artist 2'},
+      );
+
+      expect(filtered.madeForYou, isEmpty);
+      expect(filtered.similarToFavorites, isEmpty); // t2 has Artist 2, so purged
+      expect(filtered.discoverArtists.length, equals(1));
+      expect(filtered.discoverArtists.first.name, equals('Artist 1'));
+    });
+  });
 }
+
 
