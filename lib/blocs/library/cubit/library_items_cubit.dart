@@ -165,14 +165,24 @@ class LibraryItemsCubit extends Cubit<LibraryItemsState> {
   // ── Track management ───────────────────────────────────────────────────────
 
   /// Add a [Track] to a named playlist.
-  Future<void> addToPlaylist(Track track, String playlistName,
+  /// Returns `true` if newly added and persisted, `false` if already present in the playlist (duplicate).
+  Future<bool> addToPlaylist(Track track, String playlistName,
       {bool showSnackbar = true}) async {
-    if (playlistName == 'Null' || playlistName.isEmpty) return;
+    if (playlistName == 'Null' || playlistName.isEmpty) return false;
     try {
-      await _playlistDao.addTrackToPlaylistByName(playlistName, track);
+      final entryId =
+          await _playlistDao.addTrackToPlaylistByName(playlistName, track);
+      if (entryId == null) {
+        if (showSnackbar) {
+          SnackbarService.showMessage(
+              '${track.title} is already in $playlistName');
+        }
+        return false;
+      }
       if (showSnackbar) {
         SnackbarService.showMessage('${track.title} added to $playlistName');
       }
+      return true;
     } catch (e) {
       log('Failed to add "${track.title}" to "$playlistName": $e',
           name: 'LibraryItemsCubit');
@@ -180,6 +190,7 @@ class LibraryItemsCubit extends Cubit<LibraryItemsState> {
         SnackbarService.showMessage(
             'Failed to add to playlist: ${e.toString().split('\n').first}');
       }
+      rethrow;
     }
   }
 

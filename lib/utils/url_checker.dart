@@ -20,11 +20,29 @@ enum UrlType {
 
 String? extractVideoId(String url) {
   try {
-    final uri = Uri.parse(url);
-    if (uri.host.contains('youtube.com') || uri.host.contains('music.youtube.com')) {
-      return uri.queryParameters['v'];
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null) return null;
+    final host = uri.host.toLowerCase();
+    if (host.contains('youtube.com') || host.contains('music.youtube.com')) {
+      if (uri.queryParameters.containsKey('v')) {
+        final v = uri.queryParameters['v'];
+        if (v != null && v.isNotEmpty) return v;
+      }
+      final segments = uri.pathSegments;
+      final shortsIdx = segments.indexOf('shorts');
+      if (shortsIdx != -1 && shortsIdx + 1 < segments.length) {
+        return segments[shortsIdx + 1];
+      }
+      final embedIdx = segments.indexOf('embed');
+      if (embedIdx != -1 && embedIdx + 1 < segments.length) {
+        return segments[embedIdx + 1];
+      }
+      final vIdx = segments.indexOf('v');
+      if (vIdx != -1 && vIdx + 1 < segments.length) {
+        return segments[vIdx + 1];
+      }
     }
-    if (uri.host == 'youtu.be') {
+    if (host == 'youtu.be') {
       return uri.pathSegments.isNotEmpty ? uri.pathSegments.first : null;
     }
   } catch (e) {

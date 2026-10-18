@@ -333,8 +333,14 @@ class PluginBootstrapService {
           await settingsDao.getSettingStr(SettingKeys.searchPluginId);
       if (currentSearch == null || currentSearch.isEmpty) {
         final searchPlugin = available.firstWhere(
-          (p) => p.pluginType == PluginType.contentResolver,
-          orElse: () => throw StateError('none'),
+          (p) =>
+              p.pluginType == PluginType.contentResolver &&
+              (p.manifest.id.toLowerCase().contains('saavn') ||
+                  p.manifest.name.toLowerCase().contains('saavn')),
+          orElse: () => available.firstWhere(
+            (p) => p.pluginType == PluginType.contentResolver,
+            orElse: () => throw StateError('none'),
+          ),
         );
         await settingsDao.putSettingStr(
             SettingKeys.searchPluginId, searchPlugin.manifest.id);

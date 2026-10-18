@@ -57,7 +57,7 @@ class _SearchScreenState extends State<SearchScreen> {
 
   // Highly optimized State Management using Notifiers (Eliminates Root setState)
   final ValueNotifier<ContentSearchFilter> _filterNotifier =
-      ValueNotifier(ContentSearchFilter.all);
+      ValueNotifier(ContentSearchFilter.track);
   final ValueNotifier<String?> _activePluginIdNotifier = ValueNotifier(null);
   final ValueNotifier<bool> _isSuggestionPanelOpenNotifier =
       ValueNotifier(false);
@@ -69,6 +69,31 @@ class _SearchScreenState extends State<SearchScreen> {
 
   List<({String query, ContentSearchFilter filter})>
       _currentCombinedSuggestions = [];
+
+  String _resolveDefaultSearchPlugin(
+      List<PluginInfo> resolvers, String persistedId) {
+    if (resolvers.isEmpty) return '';
+
+    // If the user has an explicitly persisted choice that is still loaded:
+    if (persistedId.isNotEmpty &&
+        resolvers.any((p) => p.manifest.id == persistedId)) {
+      return persistedId;
+    }
+
+    // Default to JioSaavn if available:
+    final saavn = resolvers.cast<PluginInfo?>().firstWhere(
+      (p) =>
+          p != null &&
+          (p.manifest.id.toLowerCase().contains('saavn') ||
+              p.manifest.name.toLowerCase().contains('saavn')),
+      orElse: () => null,
+    );
+    if (saavn != null) {
+      return saavn.manifest.id;
+    }
+
+    return resolvers.first.manifest.id;
+  }
 
   @override
   void initState() {
@@ -89,10 +114,7 @@ class _SearchScreenState extends State<SearchScreen> {
     final resolvers = pluginState.loadedContentResolvers;
     if (resolvers.isNotEmpty) {
       final persistedId = context.read<SettingsCubit>().state.searchPluginId;
-      final hasPersistedPlugin = persistedId.isNotEmpty &&
-          resolvers.any((p) => p.manifest.id == persistedId);
-      final activeId =
-          hasPersistedPlugin ? persistedId : resolvers.first.manifest.id;
+      final activeId = _resolveDefaultSearchPlugin(resolvers, persistedId);
 
       _activePluginIdNotifier.value = activeId;
       _contentBloc.add(SetActiveContentPlugin(pluginId: activeId));
@@ -247,10 +269,7 @@ class _SearchScreenState extends State<SearchScreen> {
       listener: (context, pluginState) {
         final resolvers = pluginState.loadedContentResolvers;
         final persistedId = context.read<SettingsCubit>().state.searchPluginId;
-        final hasPersistedPlugin = persistedId.isNotEmpty &&
-            resolvers.any((p) => p.manifest.id == persistedId);
-        final activeId =
-            hasPersistedPlugin ? persistedId : resolvers.first.manifest.id;
+        final activeId = _resolveDefaultSearchPlugin(resolvers, persistedId);
 
         _activePluginIdNotifier.value = activeId;
         _contentBloc.add(SetActiveContentPlugin(pluginId: activeId));

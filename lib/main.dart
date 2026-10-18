@@ -41,7 +41,6 @@ import 'package:Bloomee/services/shortcut_indicator_service.dart';
 import 'package:Bloomee/core/theme/app_theme.dart';
 import 'package:Bloomee/services/import_export_service.dart';
 import 'package:Bloomee/utils/ticker.dart';
-import 'package:Bloomee/utils/url_checker.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -65,24 +64,21 @@ import 'package:Bloomee/screens/widgets/plugin_bootstrap_overlay.dart';
 import 'package:Bloomee/services/onboarding_service.dart';
 import 'package:Bloomee/services/plugin_bootstrap_service.dart';
 import 'package:Bloomee/plugins/services/plugin_repository_service.dart';
-import 'package:Bloomee/services/shared_url_resolver_service.dart';
+import 'package:Bloomee/screens/widgets/tarangx_splash_screen.dart';
+import 'package:Bloomee/services/share/android_share_service.dart';
 
 void processIncomingIntent(SharedMedia sharedMedia) {
-  if (sharedMedia.content != null && isUrl(sharedMedia.content!)) {
-    final urlType = getUrlType(sharedMedia.content!);
-    switch (urlType) {
-      case UrlType.youtubeVideo:
-        _handleYoutubeVideoIntent(sharedMedia.content!);
-        break;
-      case UrlType.youtubePlaylist:
-      case UrlType.spotifyTrack:
-      case UrlType.spotifyPlaylist:
-      case UrlType.spotifyAlbum:
-      case UrlType.other:
-        SnackbarService.showMessage(
-            'Open the Import screen in Library to import from this URL.');
-        break;
-    }
+  final context = GlobalRoutes.globalRouterKey.currentContext;
+  if (context == null) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      processIncomingIntent(sharedMedia);
+    });
+    return;
+  }
+
+  // Handle shared media text / URLs without disturbing current playback or replacing queue.
+  if (sharedMedia.content != null && sharedMedia.content!.trim().isNotEmpty) {
+    AndroidShareService.handleSharedMedia(context, sharedMedia);
   } else if (sharedMedia.attachments != null &&
       sharedMedia.attachments!.isNotEmpty) {
     final attachment = sharedMedia.attachments!.first;
@@ -90,38 +86,6 @@ void processIncomingIntent(SharedMedia sharedMedia) {
       SnackbarService.showMessage('Processing File...');
       importItems(attachment.path);
     }
-  }
-}
-
-Future<void> _handleYoutubeVideoIntent(String url) async {
-  if (extractVideoId(url) == null) {
-    SnackbarService.showMessage('Invalid YouTube URL');
-    return;
-  }
-  SnackbarService.showMessage('Getting YouTube Audio...');
-
-  final result = await SharedUrlResolverService.resolveYoutubeVideo(url);
-  if (result.status == SharedUrlResolveStatus.invalidUrl) {
-    SnackbarService.showMessage('Invalid YouTube URL');
-    return;
-  }
-
-  if (result.status == SharedUrlResolveStatus.noResolver) {
-    SnackbarService.showMessage(
-        'No loaded content resolver can handle this URL.');
-    return;
-  }
-
-  final track = result.track;
-  if (result.status == SharedUrlResolveStatus.success && track != null) {
-    final player = await PlayerInitializer().getTarangXMusicPlayer();
-    await player.updateQueueTracks([track], doPlay: true);
-    SnackbarService.showMessage('Playing: ${track.title}');
-    return;
-  }
-
-  if (result.status == SharedUrlResolveStatus.failed) {
-    SnackbarService.showMessage('Failed to get YouTube audio.');
   }
 }
 
@@ -274,29 +238,31 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   Future<void> initPlatformState() async {
     try {
       final handler = ShareHandlerPlatform.instance;
-      sharedMedia = await handler.getInitialSharedMedia();
+      final initial = await handler.getInitialSharedMedia();
 
       _intentSub = handler.sharedMediaStream.listen((SharedMedia media) {
         if (!mounted) return;
         setState(() {
           sharedMedia = media;
         });
-        if (sharedMedia != null) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            processIncomingIntent(sharedMedia!);
-          });
-        }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          processIncomingIntent(media);
+        });
       });
+
       if (!mounted) return;
 
-      setState(() {
-        // If there's initial shared media, process it
-        if (sharedMedia != null) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            processIncomingIntent(sharedMedia!);
-          });
-        }
-      });
+      if (initial != null) {
+        setState(() {
+          sharedMedia = initial;
+        });
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          processIncomingIntent(initial);
+        });
+        try {
+          await handler.resetInitialSharedMedia();
+        } catch (_) {}
+      }
     } catch (error, stackTrace) {
       debugPrint('Failed to initialize share handler: $error\n$stackTrace');
     }
@@ -494,12 +460,12 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       child: BlocBuilder<TarangXPlayerCubit, TarangXPlayerState>(
         builder: (context, state) {
           if (state is TarangXPlayerInitial) {
-            return const Center(
-              child: SizedBox(
-                width: 50,
-                height: 50,
-                child: CircularProgressIndicator(
-                  color: Default_Theme.accentColor2,
+            return const MaterialApp(
+              debugShowCheckedModeBanner: false,
+              home: Scaffold(
+                backgroundColor: Default_Theme.primaryColor2,
+                body: TarangXSplashScreen(
+                  statusMessage: "Starting TarangX...",
                 ),
               ),
             );
@@ -530,7 +496,9 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                         ],
                         child: GlobalEventListener(
                           navigatorKey: GlobalRoutes.globalRouterKey,
-                          child: child!,
+                          child: TarangXSplashWrapper(
+                            child: child!,
+                          ),
                         ),
                       ),
                       scaffoldMessengerKey: SnackbarService.messengerKey,

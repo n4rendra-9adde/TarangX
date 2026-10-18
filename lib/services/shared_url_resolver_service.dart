@@ -10,6 +10,7 @@ import 'package:Bloomee/src/rust/api/plugin/commands.dart';
 import 'package:Bloomee/src/rust/api/plugin/plugin_info.dart';
 import 'package:Bloomee/src/rust/api/plugin/types.dart';
 import 'package:Bloomee/utils/url_checker.dart';
+import 'package:http/http.dart' as http;
 
 enum SharedUrlResolveStatus {
   success,
@@ -82,6 +83,96 @@ class SharedUrlResolverService {
     }
 
     return const SharedUrlResolveResult(status: SharedUrlResolveStatus.failed);
+  }
+
+  /// Resolve a Spotify track URL to a playable Track using standard public oEmbed metadata
+  /// and content-resolver matching.
+  static Future<SharedUrlResolveResult> resolveSpotifyTrack(String url) async {
+    final parsed = Uri.tryParse(url.trim());
+    if (parsed == null ||
+        !parsed.hasScheme ||
+        (parsed.scheme != 'http' && parsed.scheme != 'https') ||
+        parsed.host.toLowerCase() != 'open.spotify.com' ||
+        !parsed.pathSegments.contains('track')) {
+      return const SharedUrlResolveResult(
+        status: SharedUrlResolveStatus.invalidUrl,
+      );
+    }
+
+    try {
+      final oEmbedUri = Uri.parse(
+        'https://open.spotify.com/oembed?url=${Uri.encodeComponent(url.trim())}',
+      );
+      final response = await http
+          .get(oEmbedUri, headers: {'User-Agent': 'TarangX/3.0'})
+          .timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic>) {
+          final title = data['title']?.toString() ?? '';
+          final artist = data['author_name']?.toString() ?? '';
+          if (title.isNotEmpty) {
+            final query = artist.isNotEmpty ? '$title $artist' : title;
+            final track = await searchFirstTrack(query);
+            if (track != null) {
+              return SharedUrlResolveResult(
+                status: SharedUrlResolveStatus.success,
+                track: track,
+              );
+            }
+          }
+        }
+      }
+    } catch (e) {
+      log('Spotify oEmbed resolution failed: $e',
+          name: 'SharedUrlResolverService');
+    }
+
+    return const SharedUrlResolveResult(status: SharedUrlResolveStatus.failed);
+  }
+
+  /// Search across active content resolvers for the first matching playable track.
+  static Future<Track?> searchFirstTrack(String query) async {
+    if (query.trim().isEmpty) return null;
+    try {
+      final pluginService = ServiceLocator.pluginService;
+      final available = await pluginService.getAvailablePlugins();
+      final loadedIds = pluginService.getLoadedPlugins().toSet();
+      final priority = await _getResolverPriority();
+
+      final resolvers = available
+          .where((p) =>
+              p.pluginType == PluginType.contentResolver &&
+              loadedIds.contains(p.manifest.id))
+          .toList(growable: false);
+
+      resolvers.sort((a, b) => _resolverPriorityIndex(a, priority)
+          .compareTo(_resolverPriorityIndex(b, priority)));
+
+      for (final plugin in resolvers) {
+        try {
+          final response = await pluginService.execute(
+            pluginId: plugin.manifest.id,
+            request: PluginRequest.contentResolver(
+              ContentResolverCommand.search(
+                query: query,
+                filter: ContentSearchFilter.track,
+              ),
+            ),
+          ).timeout(const Duration(seconds: 8));
+
+          if (response is PluginResponse_Search) {
+            for (final item in response.field0.items) {
+              if (item is MediaItem_Track) {
+                return item.field0;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+    return null;
   }
 
   static Future<List<PluginInfo>> _rankContentResolversForUrl(String url) async {

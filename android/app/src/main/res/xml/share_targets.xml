@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
-    <share-target android:targetClass="com.tarangx.musicplayer.MainActivity">
-        <data android:mimeType="*/*" />
+    <share-target android:targetClass="com.ryanheise.audioservice.AudioServiceActivity">
+        <data android:mimeType="text/plain" />
+        <data android:mimeType="text/*" />
         <category android:name="com.tarangx.musicplayer.dynamic_share_target" />
     </share-target>
 </shortcuts>
