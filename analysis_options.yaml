@@ -11,6 +11,9 @@ include: package:flutter_lints/flutter.yaml
 
 analyzer:
   exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    - "lib/src/rust/**"
     # Vendored FRB/cargokit helper package has its own pubspec and dependency graph.
     # Root-level flutter analyze should not traverse it.
     - rust_builder/cargokit/build_tool/**
@@ -21,6 +24,8 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
+  errors:
+    experimental_member_use: ignore
 
 linter:
   # The lint rules applied to this project can be customized in the
