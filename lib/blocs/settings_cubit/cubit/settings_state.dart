@@ -18,6 +18,7 @@ class SettingsState extends Equatable {
   final bool autoPlay;
   final bool autoResolveUnavailableTracks;
   final String languageCode;
+  final List<String> musicLanguages;
   final String countryCode;
   final Map chartMap;
   final int crossfadeDuration; // seconds, 0 = disabled
@@ -47,6 +48,7 @@ class SettingsState extends Equatable {
     required this.historyClearTime,
     required this.autoGetCountry,
     required this.languageCode,
+    required this.musicLanguages,
     required this.countryCode,
     required this.autoSaveLyrics,
     required this.lFMPicks,
@@ -78,6 +80,7 @@ class SettingsState extends Equatable {
     String? historyClearTime,
     bool? autoGetCountry,
     String? languageCode,
+    List<String>? musicLanguages,
     String? countryCode,
     bool? lFMPicks,
     bool? lastFMScrobble,
@@ -108,6 +111,9 @@ class SettingsState extends Equatable {
       historyClearTime: historyClearTime ?? this.historyClearTime,
       autoGetCountry: autoGetCountry ?? this.autoGetCountry,
       languageCode: languageCode ?? this.languageCode,
+      musicLanguages: musicLanguages != null
+          ? List<String>.from(musicLanguages)
+          : List<String>.from(this.musicLanguages),
       countryCode: countryCode ?? this.countryCode,
       lFMPicks: lFMPicks ?? this.lFMPicks,
       lastFMScrobble: lastFMScrobble ?? this.lastFMScrobble,
@@ -148,6 +154,7 @@ class SettingsState extends Equatable {
         historyClearTime,
         autoGetCountry,
         languageCode,
+        musicLanguages,
         countryCode,
         chartMap,
         lFMPicks,
@@ -182,6 +189,7 @@ class SettingsInitial extends SettingsState {
           historyClearTime: "30",
           autoGetCountry: true,
           languageCode: '',
+          musicLanguages: const ['Hindi', 'English'],
           countryCode: "US",
           chartMap: {},
           lFMPicks: false,

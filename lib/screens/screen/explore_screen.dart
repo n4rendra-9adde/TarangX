@@ -33,6 +33,10 @@ import 'chart/carousal_widget.dart';
 import '../widgets/horizontal_card_view.dart';
 import '../widgets/tab_list_widget.dart';
 import 'package:badges/badges.dart' as badges;
+import 'package:Bloomee/screens/screen/common_views/playlist_view.dart';
+import 'package:Bloomee/screens/widgets/language_selection_modals.dart';
+import 'package:Bloomee/src/rust/api/plugin/commands.dart';
+import 'package:Bloomee/src/rust/api/plugin/models.dart';
 
 class ExploreScreen extends StatefulWidget {
   const ExploreScreen({super.key});
@@ -257,6 +261,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                               return const _EmptyRecentCard();
                             },
                           ),
+                          const _LanguagePlaylistsSection(),
                           BlocBuilder<SettingsCubit, SettingsState>(
                             builder: (context, state) {
                               if (state.lFMPicks) {
@@ -969,3 +974,570 @@ class _EmptyRecentCard extends StatelessWidget {
     );
   }
 }
+
+class _LanguagePlaylistsSection extends StatefulWidget {
+  const _LanguagePlaylistsSection();
+
+  @override
+  State<_LanguagePlaylistsSection> createState() =>
+      _LanguagePlaylistsSectionState();
+}
+
+class _LanguagePlaylistsSectionState extends State<_LanguagePlaylistsSection> {
+  String _activeTab = 'All';
+
+  Future<void> _handlePlaylistTap(
+    BuildContext context,
+    CuratedLanguagePlaylistData playlist,
+  ) async {
+    final pluginState = context.read<PluginBloc>().state;
+    final resolvers = pluginState.loadedContentResolvers;
+    if (resolvers.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enable a content plugin in Plugin Manager.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final preferredId = context.read<SettingsCubit>().state.homePluginId;
+    final pluginId = preferredId.isNotEmpty &&
+            resolvers.any((p) => p.manifest.id == preferredId)
+        ? preferredId
+        : resolvers.first.manifest.id;
+
+    // Try resolving real remote playlist from plugin
+    try {
+      final response = await ServiceLocator.pluginService.execute(
+        pluginId: pluginId,
+        request: PluginRequest.contentResolver(
+          ContentResolverCommand.search(
+            query: playlist.searchQuery,
+            filter: ContentSearchFilter.playlist,
+          ),
+        ),
+      );
+
+      PlaylistSummary? matched;
+      response.when(
+        search: (results) {
+          for (final item in results.items) {
+            if (item is MediaItem_Playlist) {
+              matched = item.field0;
+              break;
+            }
+          }
+        },
+        trackDetails: (_) {},
+        albumDetails: (_) {},
+        artistDetails: (_) {},
+        playlistDetails: (_) {},
+        streams: (_) {},
+        moreTracks: (_) {},
+        moreAlbums: (_) {},
+        homeSections: (_) {},
+        loadMoreItems: (_) {},
+        charts: (_) {},
+        chartDetails: (_) {},
+        segments: (_) {},
+        lyricsResult: (_) {},
+        lyricsSearchResults: (_) {},
+        lyricsById: (_, __) {},
+        suggestions: (_) {},
+        canHandle: (_) {},
+        collectionInfo: (_) {},
+        importTracks: (_) {},
+        ack: () {},
+      );
+
+      if (matched != null && context.mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => OnlPlaylistView(
+              playlist: matched!,
+              pluginId: pluginId,
+            ),
+          ),
+        );
+        return;
+      }
+    } catch (e) {
+      log('Playlist search error: $e', name: '_LanguagePlaylistsSection');
+    }
+
+    // Fallback: open OnlPlaylistView with curated playlist summary
+    if (context.mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => OnlPlaylistView(
+            playlist: PlaylistSummary(
+              id: playlist.id,
+              title: playlist.title,
+              owner: '${playlist.language} Music',
+              thumbnail: Artwork(
+                url: playlist.coverUrl,
+                layout: ImageLayout.square,
+              ),
+            ),
+            pluginId: pluginId,
+          ),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocBuilder<SettingsCubit, SettingsState>(
+      buildWhen: (prev, curr) =>
+          prev.musicLanguages != curr.musicLanguages ||
+          prev.homePluginId != curr.homePluginId,
+      builder: (context, settingsState) {
+        final languages = settingsState.musicLanguages.isEmpty
+            ? const ['Hindi', 'English']
+            : settingsState.musicLanguages;
+
+        if (_activeTab != 'All' && !languages.contains(_activeTab)) {
+          _activeTab = 'All';
+        }
+
+        // Filter playlists by active languages
+        final visiblePlaylists = kCuratedLanguagePlaylists.where((p) {
+          if (_activeTab == 'All') {
+            return languages.contains(p.language);
+          }
+          return p.language == _activeTab;
+        }).toList();
+
+        return Container(
+          margin: const EdgeInsets.only(top: 14, bottom: 6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 4, 16, 6),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 3.5,
+                      height: 18,
+                      decoration: BoxDecoration(
+                        color: Default_Theme.accentColor2,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Playlists in Your Languages',
+                            style: TextStyle(
+                              fontFamily: 'Gilroy',
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                              color: Default_Theme.primaryColor1,
+                              letterSpacing: -0.3,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Curated for ${languages.join(", ")}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontFamily: 'Gilroy',
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              color: Default_Theme.primaryColor2
+                                  .withValues(alpha: 0.8),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Quick edit button
+                    TextButton.icon(
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      icon: const Icon(
+                        MingCute.settings_6_line,
+                        size: 15,
+                        color: Default_Theme.accentLavender,
+                      ),
+                      label: const Text(
+                        'Edit',
+                        style: TextStyle(
+                          fontFamily: 'Gilroy',
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                          color: Default_Theme.accentLavender,
+                        ),
+                      ),
+                      onPressed: () {
+                        HapticFeedback.selectionClick();
+                        MusicLanguagePickerModal.show(
+                          context: context,
+                          currentLanguages: languages,
+                          onSaved: (newLangs) {
+                            context
+                                .read<SettingsCubit>()
+                                .setMusicLanguages(newLangs);
+                          },
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 4),
+
+              // Filter pills row
+              SizedBox(
+                height: 36,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  children: [
+                    _buildPill(
+                      label: 'All (${languages.length})',
+                      isSelected: _activeTab == 'All',
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        setState(() => _activeTab = 'All');
+                      },
+                    ),
+                    ...languages.map(
+                      (lang) => _buildPill(
+                        label: lang,
+                        isSelected: _activeTab == lang,
+                        onTap: () {
+                          HapticFeedback.selectionClick();
+                          setState(() => _activeTab = lang);
+                        },
+                      ),
+                    ),
+                    // Add more languages pill
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(20),
+                        onTap: () {
+                          HapticFeedback.selectionClick();
+                          MusicLanguagePickerModal.show(
+                            context: context,
+                            currentLanguages: languages,
+                            onSaved: (newLangs) {
+                              context
+                                  .read<SettingsCubit>()
+                                  .setMusicLanguages(newLangs);
+                            },
+                          );
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Default_Theme.surface.withValues(alpha: 0.5),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: Default_Theme.surfaceBorderSubtle,
+                              width: 0.8,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Icon(
+                                MingCute.add_line,
+                                size: 14,
+                                color: Default_Theme.primaryColor2,
+                              ),
+                              SizedBox(width: 4),
+                              Text(
+                                'Languages',
+                                style: TextStyle(
+                                  fontFamily: 'Gilroy',
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: Default_Theme.primaryColor2,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 10),
+
+              // Horizontal playlist cards
+              if (visiblePlaylists.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+                  child: Text(
+                    'No playlists found for the selected language.',
+                    style: TextStyle(
+                      fontFamily: 'Gilroy',
+                      fontSize: 13,
+                      color: Default_Theme.primaryColor2,
+                    ),
+                  ),
+                )
+              else
+                SizedBox(
+                  height: 224,
+                  child: ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    itemCount: visiblePlaylists.length,
+                    itemBuilder: (context, idx) {
+                      final item = visiblePlaylists[idx];
+                      return _LanguagePlaylistCard(
+                        playlist: item,
+                        onTap: () => _handlePlaylistTap(context, item),
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildPill({
+    required String label,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            decoration: BoxDecoration(
+              gradient: isSelected ? Default_Theme.brandGradient : null,
+              color: isSelected
+                  ? null
+                  : Default_Theme.primaryColor2.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: isSelected
+                    ? Colors.transparent
+                    : Colors.white.withValues(alpha: 0.06),
+                width: 1,
+              ),
+              boxShadow: isSelected
+                  ? [
+                      BoxShadow(
+                        color:
+                            Default_Theme.accentColor2.withValues(alpha: 0.35),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Center(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontFamily: 'Gilroy',
+                  fontSize: 12.5,
+                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                  color: isSelected ? Colors.white : Default_Theme.primaryColor1,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LanguagePlaylistCard extends StatefulWidget {
+  final CuratedLanguagePlaylistData playlist;
+  final VoidCallback onTap;
+
+  const _LanguagePlaylistCard({
+    required this.playlist,
+    required this.onTap,
+  });
+
+  @override
+  State<_LanguagePlaylistCard> createState() => _LanguagePlaylistCardState();
+}
+
+class _LanguagePlaylistCardState extends State<_LanguagePlaylistCard> {
+  bool _isHovering = false;
+  bool _isLoading = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: GestureDetector(
+        onTap: () async {
+          setState(() => _isLoading = true);
+          try {
+            widget.onTap();
+          } finally {
+            if (mounted) setState(() => _isLoading = false);
+          }
+        },
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _isHovering = true),
+          onExit: (_) => setState(() => _isHovering = false),
+          child: SizedBox(
+            width: 154,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Artwork stack
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: Stack(
+                    children: [
+                      SizedBox(
+                        width: 154,
+                        height: 154,
+                        child: LoadImageCached(
+                          imageUrl: widget.playlist.coverUrl,
+                          fallbackUrl: widget.playlist.coverUrl,
+                        ),
+                      ),
+                      // Language Tag
+                      Positioned(
+                        top: 8,
+                        left: 8,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3.5),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.65),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.15),
+                              width: 0.5,
+                            ),
+                          ),
+                          child: Text(
+                            widget.playlist.language.toUpperCase(),
+                            style: const TextStyle(
+                              fontFamily: 'Gilroy',
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w800,
+                              color: Default_Theme.accentLavender,
+                              letterSpacing: 0.6,
+                            ),
+                          ),
+                        ),
+                      ),
+                      // Hover/Loading play indicator
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 180),
+                        width: 154,
+                        height: 154,
+                        color: (_isHovering || _isLoading)
+                            ? Colors.black.withValues(alpha: 0.45)
+                            : Colors.transparent,
+                        child: Center(
+                          child: _isLoading
+                              ? const SizedBox(
+                                  width: 32,
+                                  height: 32,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.5,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : AnimatedOpacity(
+                                  opacity: _isHovering ? 1.0 : 0.0,
+                                  duration: const Duration(milliseconds: 150),
+                                  child: Container(
+                                    width: 44,
+                                    height: 44,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      gradient: Default_Theme.brandGradient,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Default_Theme.accentColor2
+                                              .withValues(alpha: 0.4),
+                                          blurRadius: 10,
+                                        ),
+                                      ],
+                                    ),
+                                    child: const Center(
+                                      child: Icon(
+                                        MingCute.play_fill,
+                                        color: Colors.white,
+                                        size: 20,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                // Title
+                Text(
+                  widget.playlist.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontFamily: 'Gilroy',
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: Default_Theme.primaryColor1,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                // Subtitle
+                Text(
+                  widget.playlist.subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontFamily: 'Gilroy',
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w400,
+                    color: Default_Theme.primaryColor2.withValues(alpha: 0.75),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+

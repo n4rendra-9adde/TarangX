@@ -2,10 +2,12 @@ import 'package:Bloomee/blocs/settings_cubit/cubit/settings_cubit.dart';
 import 'package:Bloomee/l10n/language_options.dart';
 import 'package:Bloomee/screens/screen/home_views/setting_views/setting_shared_widgets.dart';
 import 'package:Bloomee/screens/widgets/country_picker_modal.dart';
+import 'package:Bloomee/screens/widgets/language_selection_modals.dart';
 import 'package:Bloomee/services/db/dao/settings_dao.dart';
 import 'package:Bloomee/services/db/db_provider.dart';
 import 'package:Bloomee/utils/country_info.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:Bloomee/core/theme/app_theme.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:Bloomee/l10n/app_localizations.dart';
@@ -51,7 +53,8 @@ class CountrySettings extends StatelessWidget {
         buildWhen: (prev, curr) =>
             prev.countryCode != curr.countryCode ||
             prev.autoGetCountry != curr.autoGetCountry ||
-            prev.languageCode != curr.languageCode,
+            prev.languageCode != curr.languageCode ||
+            prev.musicLanguages != curr.musicLanguages,
         builder: (context, state) {
           final currentLanguageLabel = languageItems
               .firstWhere(
@@ -74,16 +77,23 @@ class CountrySettings extends StatelessWidget {
               SettingSectionHeader(label: l10n.settingsLanguageCountry),
               SettingCard(
                 children: [
-                  SettingDropdownTile<String>(
+                  SettingNavTile(
                     icon: MingCute.translate_2_line,
                     title: l10n.countrySettingLanguageLabel,
                     subtitle: currentLanguageLabel,
-                    value: state.languageCode,
-                    items: languageItems,
-                    onChanged: (newValue) {
-                      if (newValue != null) {
-                        context.read<SettingsCubit>().setLanguageCode(newValue);
-                      }
+                    badge: state.languageCode.isEmpty
+                        ? 'AUTO'
+                        : state.languageCode.toUpperCase(),
+                    onTap: () {
+                      SpotifyLanguageModal.show(
+                        context: context,
+                        currentCode: state.languageCode,
+                        onSelected: (newValue) {
+                          context
+                              .read<SettingsCubit>()
+                              .setLanguageCode(newValue);
+                        },
+                      );
                     },
                   ),
                   const SettingDivider(),
@@ -137,6 +147,128 @@ class CountrySettings extends StatelessWidget {
                         },
                       );
                     },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              const SettingSectionHeader(label: 'Music Languages Preference'),
+              SettingCard(
+                children: [
+                  SettingNavTile(
+                    icon: MingCute.music_2_line,
+                    title: 'Song Languages',
+                    subtitle: state.musicLanguages.isEmpty
+                        ? 'Hindi, English'
+                        : state.musicLanguages.join(', '),
+                    badge: '${state.musicLanguages.length} selected',
+                    onTap: () {
+                      MusicLanguagePickerModal.show(
+                        context: context,
+                        currentLanguages: state.musicLanguages,
+                        onSaved: (langs) {
+                          context
+                              .read<SettingsCubit>()
+                              .setMusicLanguages(langs);
+                        },
+                      );
+                    },
+                  ),
+                  const SettingDivider(),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Tap to toggle your favorite song languages',
+                          style: TextStyle(
+                            fontFamily: 'Gilroy',
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Default_Theme.primaryColor2
+                                .withValues(alpha: 0.75),
+                            letterSpacing: 0.2,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: kAvailableMusicLanguages.map((item) {
+                            final isSelected =
+                                state.musicLanguages.contains(item.name);
+                            return Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(20),
+                                onTap: () {
+                                  HapticFeedback.selectionClick();
+                                  final current =
+                                      List<String>.from(state.musicLanguages);
+                                  if (isSelected) {
+                                    if (current.length > 1) {
+                                      current.remove(item.name);
+                                    }
+                                  } else {
+                                    current.add(item.name);
+                                  }
+                                  context
+                                      .read<SettingsCubit>()
+                                      .setMusicLanguages(current);
+                                },
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 180),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 6.5),
+                                  decoration: BoxDecoration(
+                                    color: isSelected
+                                        ? Default_Theme.accentColor2
+                                            .withValues(alpha: 0.16)
+                                        : Default_Theme.surface
+                                            .withValues(alpha: 0.4),
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(
+                                      color: isSelected
+                                          ? Default_Theme.accentColor2
+                                              .withValues(alpha: 0.6)
+                                          : Default_Theme.surfaceBorderSubtle,
+                                      width: 1,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (isSelected) ...[
+                                        const Icon(
+                                          MingCute.check_fill,
+                                          size: 13,
+                                          color: Default_Theme.accentLavender,
+                                        ),
+                                        const SizedBox(width: 5),
+                                      ],
+                                      Text(
+                                        '${item.native} (${item.name})',
+                                        style: TextStyle(
+                                          fontFamily: 'Gilroy',
+                                          fontSize: 12.5,
+                                          fontWeight: isSelected
+                                              ? FontWeight.w700
+                                              : FontWeight.w500,
+                                          color: isSelected
+                                              ? Default_Theme.accentLavender
+                                              : Default_Theme.primaryColor1
+                                                  .withValues(alpha: 0.85),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),

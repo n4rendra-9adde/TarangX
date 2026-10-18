@@ -61,8 +61,9 @@ class SettingKeys {
   /// JSON-encoded last queue state for session resume.
   static const String lastQueueState = 'lastQueueState';
 
-  // ── Location / charts ───────────────────────────────────────────────────────
+  // ── Location / charts / languages ──────────────────────────────────────────
   static const String languageCode = "languageCode";
+  static const String musicLanguages = "musicLanguages";
   static const String autoGetCountry = "autoGetCountry";
   static const String countryCode = "countryCode";
   static const String chartShowMap = "chartShowMap";

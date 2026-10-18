@@ -169,6 +169,12 @@ class SettingsCubit extends Cubit<SettingsState> {
             defaultValue: ''),
         SettingKeys.suggestionPluginId,
       ),
+      // [27] musicLanguages
+      _readSetting(
+        () => _settingsRepo.getSettingStr(SettingKeys.musicLanguages,
+            defaultValue: '["Hindi", "English"]'),
+        SettingKeys.musicLanguages,
+      ),
     ]);
 
     // Normalize stream quality labels.
@@ -233,6 +239,18 @@ class SettingsCubit extends Cubit<SettingsState> {
       }
     } catch (_) {}
 
+    // Parse music languages preference.
+    List<String> musicLanguages = const ['Hindi', 'English'];
+    try {
+      final mlj = results[27] as String?;
+      if (mlj != null && mlj.isNotEmpty) {
+        final decoded = (jsonDecode(mlj) as List).cast<String>();
+        if (decoded.isNotEmpty) {
+          musicLanguages = decoded;
+        }
+      }
+    } catch (_) {}
+
     // Normalize country code.
     final rawCountry = results[14] as String?;
     final normalizedCountry =
@@ -263,6 +281,7 @@ class SettingsCubit extends Cubit<SettingsState> {
       historyClearTime: (results[5] as String?) ?? '30',
       autoGetCountry: (results[12] as bool?) ?? true,
       languageCode: (results[13] as String?) ?? '',
+      musicLanguages: musicLanguages,
       countryCode: resolvedCountry,
       autoSaveLyrics: (results[15] as bool?) ?? false,
       lFMPicks: (results[9] as bool?) ?? false,
@@ -369,6 +388,12 @@ class SettingsCubit extends Cubit<SettingsState> {
   void setLanguageCode(String v) {
     _settingsRepo.putSettingStr(SettingKeys.languageCode, v);
     emit(state.copyWith(languageCode: v));
+  }
+
+  void setMusicLanguages(List<String> languages) {
+    _settingsRepo.putSettingStr(
+        SettingKeys.musicLanguages, jsonEncode(languages));
+    emit(state.copyWith(musicLanguages: languages));
   }
 
   void setAutoSaveLyrics(bool v) {
