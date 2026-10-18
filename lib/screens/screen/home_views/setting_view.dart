@@ -9,6 +9,7 @@ import 'package:Bloomee/screens/screen/home_views/setting_views/download_setting
 import 'package:Bloomee/screens/screen/home_views/setting_views/lastfm_setting.dart';
 import 'package:Bloomee/screens/screen/home_views/setting_views/player_setting.dart';
 import 'package:Bloomee/screens/screen/home_views/setting_views/updates_setting.dart';
+import 'package:Bloomee/screens/screen/home_views/setting_views/privacy_setting.dart';
 import 'package:Bloomee/screens/screen/plugin_manager_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:Bloomee/core/theme/app_theme.dart';
@@ -128,6 +129,13 @@ class SettingsView extends StatelessWidget {
                     icon: MingCute.globe_fill,
                     iconColor: Default_Theme.accentColor2,
                     onTap: () => _navigate(context, const CountrySettings()),
+                  ),
+                  _SettingsTile(
+                    title: 'Privacy & Taste Profile',
+                    subtitle: 'Recommendation data, exclusions & taste profile reset',
+                    icon: MingCute.shield_shape_fill,
+                    iconColor: Default_Theme.accentColor2,
+                    onTap: () => _navigate(context, const PrivacySettings()),
                   ),
                   _SettingsTile(
                     title: AppLocalizations.of(context)!.settingsStorage,

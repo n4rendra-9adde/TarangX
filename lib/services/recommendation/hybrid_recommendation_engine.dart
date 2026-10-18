@@ -88,9 +88,14 @@ class HybridRecommendationEngine {
       limit: limit,
     );
 
-    log('Generated ${diversified.length} personalized recommendations',
+    // 5. Final exclusion guarantee: strictly ensure no disliked track or blocked artist is emitted
+    final finalRecommendations = diversified
+        .where((st) => !isTrackExcluded(st.track, profile) && st.score > 0.0)
+        .toList();
+
+    log('Generated ${finalRecommendations.length} personalized recommendations',
         name: 'HybridRecommendationEngine');
-    return diversified;
+    return finalRecommendations;
   }
 
   /// Generate similar tracks for a specific reference track (e.g. Now Playing).
@@ -153,7 +158,32 @@ class HybridRecommendationEngine {
     }).toList();
 
     scored.sort((a, b) => b.score.compareTo(a.score));
-    return _applyDiversityAndDeduplication(scored, maxPerArtist: 2, limit: limit);
+    final diversified = _applyDiversityAndDeduplication(scored, maxPerArtist: 2, limit: limit);
+    return diversified
+        .where((st) => !isTrackExcluded(st.track, profile) && st.score > 0.0)
+        .toList();
+  }
+
+  /// Evaluates whether a track is explicitly excluded (disliked track ID or blocked artist).
+  /// Exclusions are case-insensitive and take absolute precedence over positive preferences.
+  bool isTrackExcluded(Track track, UserTasteProfile profile) {
+    if (track.id.isEmpty) return true;
+    if (profile.dislikedTrackIds.contains(track.id)) return true;
+
+    if (profile.dislikedArtistNames.isEmpty) return false;
+
+    final dislikedArtists = profile.dislikedArtistNames
+        .map((a) => a.trim().toLowerCase())
+        .where((a) => a.isNotEmpty)
+        .toSet();
+
+    for (final artist in track.artists) {
+      final name = artist.name.trim().toLowerCase();
+      if (name.isNotEmpty && dislikedArtists.contains(name)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// Computes deterministic hybrid score for a single candidate track.
@@ -163,27 +193,14 @@ class HybridRecommendationEngine {
     Track? seedTrack,
     List<String> userLanguages = const [],
   }) {
-    // Hard filter: Disliked tracks get 0.0
-    if (profile.dislikedTrackIds.contains(candidate.id)) {
+    // Hard filter: Disliked tracks or blocked artists get 0.0
+    if (isTrackExcluded(candidate, profile)) {
       return ScoredTrack(
         track: candidate,
         score: 0.0,
         reason: const RecommendationReason(
           type: RecommendationReasonType.coldStart,
-          description: 'Disliked',
-        ),
-      );
-    }
-
-    // Hard filter: Disliked artists get 0.0
-    final candidateArtistNames = candidate.artists.map((a) => a.name.trim()).toSet();
-    if (candidateArtistNames.any((n) => profile.dislikedArtistNames.contains(n))) {
-      return ScoredTrack(
-        track: candidate,
-        score: 0.0,
-        reason: const RecommendationReason(
-          type: RecommendationReasonType.coldStart,
-          description: 'Artist Blocked',
+          description: 'Excluded',
         ),
       );
     }
@@ -354,14 +371,8 @@ class HybridRecommendationEngine {
     for (final track in candidates) {
       if (track.id.isEmpty || track.title.trim().isEmpty) continue;
 
-      // Disliked track
-      if (profile.dislikedTrackIds.contains(track.id)) continue;
-
-      // Disliked artist
-      final hasDislikedArtist = track.artists.any(
-        (a) => profile.dislikedArtistNames.contains(a.name.trim()),
-      );
-      if (hasDislikedArtist) continue;
+      // Disliked track or blocked artist (case-insensitive)
+      if (isTrackExcluded(track, profile)) continue;
 
       // Deduplicate by normalized Title + Primary Artist
       final primaryArtist = track.artists.isNotEmpty ? track.artists.first.name.trim().toLowerCase() : '';

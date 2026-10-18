@@ -212,8 +212,14 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
       unawaited(_persistPlayerStateOnBackground());
+      try {
+        unawaited(ServiceLocator.signalCollector.flush());
+      } catch (_) {}
     } else if (state == AppLifecycleState.detached) {
       unawaited(_cleanupOnDetached());
+      try {
+        unawaited(ServiceLocator.signalCollector.flush());
+      } catch (_) {}
     }
   }
 

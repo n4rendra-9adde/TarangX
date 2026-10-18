@@ -545,4 +545,268 @@ void main() {
       expect(profile.likedTrackIds, isNot(contains('track-dislike-1')));
     });
   });
+
+  group('Recommendation Privacy Controls, Correctness & Reset', () {
+    late FakeHistoryDAO testHistoryDao;
+    late FakePlaylistDAO testPlaylistDao;
+    late FakeDownloadDAO testDownloadDao;
+    late FakeSettingsDAO testSettingsDao;
+    late FakePluginService testPluginService;
+    late ListeningSignalCollector testCollector;
+    late HybridRecommendationEngine testEngine;
+
+    setUp(() {
+      testHistoryDao = FakeHistoryDAO();
+      testPlaylistDao = FakePlaylistDAO();
+      testDownloadDao = FakeDownloadDAO();
+      testSettingsDao = FakeSettingsDAO();
+      testPluginService = FakePluginService();
+
+      testCollector = ListeningSignalCollector(
+        settingsDao: testSettingsDao,
+        historyDao: testHistoryDao,
+        playlistDao: testPlaylistDao,
+      );
+
+      testEngine = HybridRecommendationEngine(
+        signalCollector: testCollector,
+        historyDao: testHistoryDao,
+        playlistDao: testPlaylistDao,
+        downloadDao: testDownloadDao,
+        settingsDao: testSettingsDao,
+        pluginService: testPluginService,
+      );
+    });
+
+    tearDown(() {
+      testCollector.dispose();
+    });
+
+    test('Taste-profile reset clears derived signals while preserving explicit likes and dislikes', () async {
+      // 1. Setup profile with both explicit preferences and learned signals
+      const likedTrack = Track(
+        id: 'liked-preserved',
+        title: 'Preserved Liked Song',
+        artists: [ArtistSummary(id: 'a1', name: 'Preserved Artist')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+      testCollector.onTrackLiked(likedTrack, true);
+      testCollector.onTrackDisliked(const Track(
+        id: 'disliked-preserved',
+        title: 'Preserved Disliked Song',
+        artists: [ArtistSummary(id: 'a2', name: 'Some Artist')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      ));
+      testCollector.onArtistDisliked('Blocked Artist Preserved');
+
+      // Add learned listening signals
+      testCollector.onTrackStarted(likedTrack);
+      testCollector.onPositionUpdate(const Duration(seconds: 90), const Duration(seconds: 100));
+
+      final beforeReset = testCollector.currentProfile;
+      expect(beforeReset.artistAffinities, isNotEmpty);
+      expect(beforeReset.trackPlayCounts, isNotEmpty);
+      expect(beforeReset.trackCompletionCounts, isNotEmpty);
+      expect(beforeReset.likedTrackIds, contains('liked-preserved'));
+      expect(beforeReset.dislikedTrackIds, contains('disliked-preserved'));
+      expect(beforeReset.dislikedArtistNames, contains('Blocked Artist Preserved'));
+
+      // 2. Perform Reset Taste Profile
+      await testCollector.resetTasteProfile();
+
+      // 3. Verify derived signals are wiped
+      final afterReset = testCollector.currentProfile;
+      expect(afterReset.artistAffinities, isEmpty);
+      expect(afterReset.trackPlayCounts, isEmpty);
+      expect(afterReset.trackCompletionCounts, isEmpty);
+      expect(afterReset.trackSkipCounts, isEmpty);
+      expect(afterReset.lastPlayedTimestamps, isEmpty);
+
+      // 4. Verify explicit preferences are intact
+      expect(afterReset.likedTrackIds, contains('liked-preserved'));
+      expect(afterReset.dislikedTrackIds, contains('disliked-preserved'));
+      expect(afterReset.dislikedArtistNames, contains('Blocked Artist Preserved'));
+
+      // 5. Verify database storage contains clean profile
+      final persistedJson = testSettingsDao.stringSettings[SettingKeys.recommendationTasteProfile];
+      expect(persistedJson, isNotNull);
+      final decodedPersisted = UserTasteProfile.fromJson(persistedJson!);
+      expect(decodedPersisted.artistAffinities, isEmpty);
+      expect(decodedPersisted.trackPlayCounts, isEmpty);
+    });
+
+    test('Stale caches do not restore deleted preferences on subsequent initialization', () async {
+      // Setup and reset
+      await testCollector.resetTasteProfile();
+
+      // Add items to history DAO that would normally be seeded if profile were uninitialized
+      testHistoryDao.historyTracks = [
+        const Track(
+          id: 'old-history-track',
+          title: 'Old Song',
+          artists: [ArtistSummary(id: 'a1', name: 'Old Artist')],
+          thumbnail: Artwork(url: '', layout: ImageLayout.square),
+          isExplicit: false,
+        ),
+      ];
+
+      // Simulate app restart by initializing a new collector from the same settings DAO
+      final newCollector = ListeningSignalCollector(
+        settingsDao: testSettingsDao,
+        historyDao: testHistoryDao,
+        playlistDao: testPlaylistDao,
+      );
+
+      // Allow async _initializeProfile to complete
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      // Affinities must remain empty and NOT re-seed from old history
+      expect(newCollector.currentProfile.artistAffinities, isEmpty);
+      expect(newCollector.currentProfile.trackPlayCounts, isEmpty);
+      newCollector.dispose();
+    });
+
+    test('Pending asynchronous persistence cannot undo a completed reset', () async {
+      // 1. Play track which schedules a debounced save in 3 seconds
+      const track = Track(
+        id: 'race-track-1',
+        title: 'Race Track',
+        artists: [ArtistSummary(id: 'a1', name: 'Race Artist')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+      testCollector.onTrackStarted(track);
+
+      // 2. Immediately call resetTasteProfile (which advances epoch and cancels pending timer)
+      await testCollector.resetTasteProfile();
+
+      // 3. Wait 3.5 seconds to ensure any race condition timer has lapsed
+      await Future<void>.delayed(const Duration(milliseconds: 3200));
+
+      // 4. Stored profile must remain clean with 0 play counts
+      final storedJson = testSettingsDao.stringSettings[SettingKeys.recommendationTasteProfile];
+      expect(storedJson, isNotNull);
+      final decoded = UserTasteProfile.fromJson(storedJson!);
+      expect(decoded.trackPlayCounts, isEmpty);
+      expect(decoded.artistAffinities, isEmpty);
+    });
+
+    test('Explicit exclusions are strictly absent from recommendation output across all candidate sources', () async {
+      // Setup candidate sources:
+      // Source 1: Liked songs (includes a blocked artist and a disliked track)
+      const normalLiked = Track(
+        id: 'liked-ok',
+        title: 'Good Liked Song',
+        artists: [ArtistSummary(id: 'a1', name: 'Good Artist')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+      const blockedArtistInLiked = Track(
+        id: 'liked-blocked',
+        title: 'Song by Bad Artist',
+        artists: [ArtistSummary(id: 'a2', name: 'Blocked Artist')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+      const dislikedInLiked = Track(
+        id: 'disliked-in-liked',
+        title: 'Disliked But Liked Long Ago',
+        artists: [ArtistSummary(id: 'a3', name: 'Random Artist')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+      testPlaylistDao.likedTracks = [normalLiked, blockedArtistInLiked, dislikedInLiked];
+
+      // Source 2: History (includes blocked artist)
+      const blockedInHistory = Track(
+        id: 'hist-blocked',
+        title: 'History Song Bad',
+        artists: [ArtistSummary(id: 'a2', name: 'blocked artist')], // test case-insensitivity
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+      testHistoryDao.historyTracks = [blockedInHistory];
+
+      // Source 3: Downloads (includes blocked artist)
+      const blockedInDownloads = Track(
+        id: 'dl-blocked',
+        title: 'Download Song Bad',
+        artists: [ArtistSummary(id: 'a2', name: 'Blocked Artist')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+      testDownloadDao.downloads = [blockedInDownloads];
+
+      // Apply exclusions to collector
+      testCollector.onTrackDisliked(dislikedInLiked);
+      testCollector.onArtistDisliked('Blocked Artist');
+
+      // Fetch recommendations
+      final recommendations = await testEngine.getRecommendations(limit: 20);
+
+      // Verify no recommendation contains the disliked track or blocked artist
+      final returnedIds = recommendations.map((st) => st.track.id).toSet();
+      final returnedArtists = recommendations
+          .expand((st) => st.track.artists.map((a) => a.name.toLowerCase().trim()))
+          .toSet();
+
+      expect(returnedIds, isNot(contains('disliked-in-liked')));
+      expect(returnedIds, isNot(contains('liked-blocked')));
+      expect(returnedIds, isNot(contains('hist-blocked')));
+      expect(returnedIds, isNot(contains('dl-blocked')));
+      expect(returnedArtists, isNot(contains('blocked artist')));
+
+      // Disliked track was NOT removed from the liked playlist in DB
+      expect(testPlaylistDao.likedTracks.map((t) => t.id), contains('disliked-in-liked'));
+      expect(testPlaylistDao.likedTracks.map((t) => t.id), contains('liked-blocked'));
+    });
+
+    test('Duplicate playback starts in rapid succession are ignored', () {
+      const track = Track(
+        id: 'dup-track',
+        title: 'Rapid Track',
+        artists: [ArtistSummary(id: 'a1', name: 'Artist A')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+
+      testCollector.onTrackStarted(track);
+      expect(testCollector.currentProfile.trackPlayCounts['dup-track'], equals(1));
+
+      // Immediate second call (e.g. within 50ms)
+      testCollector.onTrackStarted(track);
+      expect(testCollector.currentProfile.trackPlayCounts['dup-track'], equals(1));
+    });
+
+    test('Lifecycle flush immediately persists profile without data loss', () async {
+      const track = Track(
+        id: 'flush-track',
+        title: 'Flush Track',
+        artists: [ArtistSummary(id: 'a1', name: 'Artist A')],
+        thumbnail: Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+
+      testCollector.onTrackStarted(track);
+      // Flush before debounce timer completes
+      await testCollector.flush();
+
+      final stored = testSettingsDao.stringSettings[SettingKeys.recommendationTasteProfile];
+      expect(stored, isNotNull);
+      final decoded = UserTasteProfile.fromJson(stored!);
+      expect(decoded.trackPlayCounts['flush-track'], equals(1));
+    });
+
+    test('Cold-start recommendations function cleanly after taste-profile reset', () async {
+      await testCollector.resetTasteProfile();
+      testSettingsDao.stringSettings[SettingKeys.musicLanguages] = 'Kannada,English';
+
+      final recommendations = await testEngine.getRecommendations(limit: 10);
+      expect(recommendations, isNotEmpty);
+      expect(recommendations.first.reason.type, equals(RecommendationReasonType.coldStart));
+    });
+  });
 }
+

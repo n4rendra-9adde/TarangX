@@ -49,11 +49,20 @@ class RecommendationCubit extends Cubit<RecommendationState> {
           ? await _engine.getSimilarTracks(seedTrack, limit: 10)
           : <ScoredTrack>[];
 
-      // Extract top affinity artists
+      // Extract top affinity artists (excluding any blocked artists)
       final profile = _collector.currentProfile;
+      final dislikedArtistsLower = profile.dislikedArtistNames
+          .map((a) => a.trim().toLowerCase())
+          .where((a) => a.isNotEmpty)
+          .toSet();
+
       final sortedArtists = profile.artistAffinities.entries.toList()
         ..sort((a, b) => b.value.compareTo(a.value));
-      final topArtists = sortedArtists.take(8).map((e) => e.key).toList();
+      final topArtists = sortedArtists
+          .where((e) => !dislikedArtistsLower.contains(e.key.trim().toLowerCase()))
+          .take(8)
+          .map((e) => e.key)
+          .toList();
 
       if (recommended.isEmpty && similar.isEmpty) {
         emit(const RecommendationEmpty());
@@ -69,6 +78,27 @@ class RecommendationCubit extends Cubit<RecommendationState> {
       log('Error loading recommendations: $e', name: 'RecommendationCubit');
       emit(RecommendationError('Failed to load recommendations: $e'));
     }
+  }
+
+  /// Resets recommendation listening signals, derived taste profile, and affinities.
+  /// Preserves liked songs, custom playlists, and downloaded tracks.
+  Future<bool> resetTasteProfile() async {
+    try {
+      emit(RecommendationLoading());
+      await _collector.resetTasteProfile();
+      await loadRecommendations(silent: false);
+      return true;
+    } catch (e) {
+      log('Error resetting taste profile: $e', name: 'RecommendationCubit');
+      emit(RecommendationError('Failed to reset taste profile: $e'));
+      return false;
+    }
+  }
+
+  /// Clears explicitly disliked tracks and blocked artists.
+  Future<void> clearDislikes() async {
+    await _collector.clearDislikes();
+    await loadRecommendations(silent: false);
   }
 
   Future<void> dislikeTrack(Track track) async {

@@ -30,6 +30,11 @@ class ListeningSignalCollector {
   bool _completionRecorded = false;
   Timer? _saveDebounceTimer;
 
+  // Concurrency & duplicate prevention
+  int _epoch = 0;
+  String? _lastRecordedTrackId;
+  DateTime? _lastRecordedStartTime;
+
   ListeningSignalCollector({
     required SettingsDAO settingsDao,
     required HistoryDAO historyDao,
@@ -46,39 +51,13 @@ class ListeningSignalCollector {
   Future<void> _initializeProfile() async {
     try {
       final raw = await _settingsDao.getSettingStr(SettingKeys.recommendationTasteProfile);
-      var profile = raw != null ? UserTasteProfile.fromJson(raw) : const UserTasteProfile();
+      final hasSavedProfile = raw != null && raw.trim().isNotEmpty;
+      var profile = hasSavedProfile ? UserTasteProfile.fromJson(raw) : const UserTasteProfile();
 
       // Synchronize with existing Liked tracks from PlaylistDAO
       final likedPlaylist = await _playlistDao.loadPlaylist(PlaylistDAO.likedPlaylist);
       final likedTracks = likedPlaylist.tracks;
       final likedIds = likedTracks.map((t) => t.id).toSet();
-
-      // Synchronize with existing recent history from HistoryDAO
-      final history = await _historyDao.getHistory(limit: 50);
-
-      final updatedPlayCounts = Map<String, int>.from(profile.trackPlayCounts);
-      final updatedAffinities = Map<String, double>.from(profile.artistAffinities);
-      final updatedLastPlayed = Map<String, DateTime>.from(profile.lastPlayedTimestamps);
-
-      for (final track in history) {
-        updatedPlayCounts[track.id] = (updatedPlayCounts[track.id] ?? 0) + 1;
-        for (final artist in track.artists) {
-          if (artist.name.trim().isNotEmpty) {
-            final name = artist.name.trim();
-            updatedAffinities[name] = (updatedAffinities[name] ?? 0.0) + 0.1;
-          }
-        }
-      }
-
-      // Add extra artist affinity for liked songs
-      for (final track in likedTracks) {
-        for (final artist in track.artists) {
-          if (artist.name.trim().isNotEmpty) {
-            final name = artist.name.trim();
-            updatedAffinities[name] = (updatedAffinities[name] ?? 0.0) + 0.5;
-          }
-        }
-      }
 
       // Read disliked tracks / artists
       final dislikedRaw = await _settingsDao.getSettingStr(SettingKeys.dislikedTrackIds);
@@ -91,13 +70,39 @@ class ListeningSignalCollector {
           ? Set<String>.from((dislikedArtistRaw.split(',')).map((s) => s.trim()).where((s) => s.isNotEmpty))
           : <String>{};
 
+      Map<String, int> playCounts = Map<String, int>.from(profile.trackPlayCounts);
+      Map<String, double> affinities = Map<String, double>.from(profile.artistAffinities);
+      Map<String, DateTime> lastPlayed = Map<String, DateTime>.from(profile.lastPlayedTimestamps);
+
+      // Only seed derived signals from history on first-time app setup when no saved profile exists
+      if (!hasSavedProfile) {
+        final history = await _historyDao.getHistory(limit: 50);
+        for (final track in history) {
+          playCounts[track.id] = (playCounts[track.id] ?? 0) + 1;
+          for (final artist in track.artists) {
+            if (artist.name.trim().isNotEmpty) {
+              final name = artist.name.trim();
+              affinities[name] = (affinities[name] ?? 0.0) + 0.1;
+            }
+          }
+        }
+        for (final track in likedTracks) {
+          for (final artist in track.artists) {
+            if (artist.name.trim().isNotEmpty) {
+              final name = artist.name.trim();
+              affinities[name] = (affinities[name] ?? 0.0) + 0.5;
+            }
+          }
+        }
+      }
+
       profile = profile.copyWith(
         likedTrackIds: likedIds,
         dislikedTrackIds: dislikedTracks,
         dislikedArtistNames: dislikedArtists,
-        trackPlayCounts: updatedPlayCounts,
-        artistAffinities: updatedAffinities,
-        lastPlayedTimestamps: updatedLastPlayed,
+        trackPlayCounts: playCounts,
+        artistAffinities: affinities,
+        lastPlayedTimestamps: lastPlayed,
       );
 
       _profileSubject.add(profile);
@@ -110,14 +115,28 @@ class ListeningSignalCollector {
 
   /// Called when a track starts playing in the audio engine.
   void onTrackStarted(Track track) {
+    if (track.id.isEmpty) return;
     if (_activeTrackId == track.id) return; // Same track continuing
+
+    final now = DateTime.now();
+
+    // Prevent duplicate track-start events in rapid succession (e.g. within 3s)
+    // for the same track caused by buffering retries or seek-on-start
+    if (_lastRecordedTrackId == track.id && _lastRecordedStartTime != null) {
+      final diff = now.difference(_lastRecordedStartTime!);
+      if (diff < const Duration(seconds: 3)) {
+        return;
+      }
+    }
 
     // Finalize previous track session if active
     _finalizeActiveSession(skipped: true);
 
     _activeTrackId = track.id;
     _activeTrack = track;
-    _activeTrackStartTime = DateTime.now();
+    _activeTrackStartTime = now;
+    _lastRecordedTrackId = track.id;
+    _lastRecordedStartTime = now;
     _maxPositionMs = 0;
     _completionRecorded = false;
 
@@ -128,7 +147,7 @@ class ListeningSignalCollector {
     final artistAffinities = Map<String, double>.from(profile.artistAffinities);
 
     playCounts[track.id] = (playCounts[track.id] ?? 0) + 1;
-    lastPlayed[track.id] = DateTime.now();
+    lastPlayed[track.id] = now;
 
     for (final artist in track.artists) {
       final name = artist.name.trim();
@@ -327,22 +346,103 @@ class ListeningSignalCollector {
   }
 
   void _updateProfile(UserTasteProfile updated) {
+    _epoch++;
     _profileSubject.add(updated);
     _scheduleProfileSave(updated);
   }
 
   void _scheduleProfileSave(UserTasteProfile profile) {
     _saveDebounceTimer?.cancel();
+    final scheduledEpoch = _epoch;
     _saveDebounceTimer = Timer(const Duration(seconds: 3), () async {
-      try {
-        await _settingsDao.putSettingStr(
-          SettingKeys.recommendationTasteProfile,
-          profile.toJson(),
-        );
-      } catch (e) {
-        log('Failed to persist taste profile: $e', name: 'ListeningSignalCollector');
-      }
+      await _saveProfileImmediately(profile, expectedEpoch: scheduledEpoch);
     });
+  }
+
+  Future<void> _saveProfileImmediately(
+    UserTasteProfile profile, {
+    int? expectedEpoch,
+  }) async {
+    // If epoch changed while waiting, discard stale write
+    if (expectedEpoch != null && expectedEpoch != _epoch) return;
+
+    try {
+      final jsonStr = profile.toJson();
+      if (expectedEpoch != null && expectedEpoch != _epoch) return;
+      await _settingsDao.putSettingStr(
+        SettingKeys.recommendationTasteProfile,
+        jsonStr,
+      );
+    } catch (e) {
+      log('Failed to persist taste profile: $e', name: 'ListeningSignalCollector');
+    }
+  }
+
+  /// Immediately flushes any pending debounced writes to local database.
+  Future<void> flush() async {
+    _saveDebounceTimer?.cancel();
+    _saveDebounceTimer = null;
+    await _saveProfileImmediately(currentProfile, expectedEpoch: _epoch);
+  }
+
+  /// Safely resets locally stored recommendation-specific signals, derived affinities,
+  /// and play counters without deleting liked songs, playlists, or downloads.
+  Future<void> resetTasteProfile() async {
+    // Invalidate any pending or in-flight debounced writes
+    _epoch++;
+    _saveDebounceTimer?.cancel();
+    _saveDebounceTimer = null;
+
+    // Reset in-memory active tracking session
+    _activeTrack = null;
+    _activeTrackId = null;
+    _activeTrackStartTime = null;
+    _lastRecordedTrackId = null;
+    _lastRecordedStartTime = null;
+    _maxPositionMs = 0;
+    _completionRecorded = false;
+
+    // Retain explicit positive likes and explicit dislikes, wipe derived signals
+    final preservedLiked = Set<String>.from(currentProfile.likedTrackIds);
+    final preservedDislikedTracks = Set<String>.from(currentProfile.dislikedTrackIds);
+    final preservedDislikedArtists = Set<String>.from(currentProfile.dislikedArtistNames);
+
+    final cleanProfile = UserTasteProfile(
+      likedTrackIds: preservedLiked,
+      dislikedTrackIds: preservedDislikedTracks,
+      dislikedArtistNames: preservedDislikedArtists,
+      artistAffinities: const {},
+      trackPlayCounts: const {},
+      trackCompletionCounts: const {},
+      trackSkipCounts: const {},
+      lastPlayedTimestamps: const {},
+    );
+
+    // Update in-memory stream subject so UI updates immediately
+    _profileSubject.add(cleanProfile);
+
+    // Persist clean profile to disk
+    await _saveProfileImmediately(cleanProfile, expectedEpoch: _epoch);
+    log('Taste profile reset successfully (liked tracks preserved: ${preservedLiked.length})',
+        name: 'ListeningSignalCollector');
+  }
+
+  /// Clears explicitly hidden/disliked tracks and blocked artists if requested by user.
+  Future<void> clearDislikes() async {
+    _epoch++;
+    final updated = currentProfile.copyWith(
+      dislikedTrackIds: const {},
+      dislikedArtistNames: const {},
+    );
+    _profileSubject.add(updated);
+
+    try {
+      await _settingsDao.putSettingStr(SettingKeys.dislikedTrackIds, '');
+      await _settingsDao.putSettingStr(SettingKeys.dislikedArtistNames, '');
+      await _saveProfileImmediately(updated, expectedEpoch: _epoch);
+    } catch (e) {
+      log('Failed to clear dislikes: $e', name: 'ListeningSignalCollector');
+    }
   }
 
   void dispose() {
