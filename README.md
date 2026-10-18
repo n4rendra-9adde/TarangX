@@ -46,18 +46,6 @@
 
 ---
 
-## 🌍 Language Support
-
-| Language | Native Name | Status |
-|----------|------------|--------|
-| 🇮🇳 Hindi | हिन्दी | ✅ Complete |
-| 🇺🇸 English | English | ✅ Complete |
-| 🇰🇷 Korean | 한국어 | ✅ Complete |
-| 🇩🇪 German | Deutsch | ✅ Complete |
-| 🇪🇸 Spanish | Español | ✅ Complete |
-| 🇯🇵 Japanese | 日本語 | ✅ Complete |
-
----
 
 <h2 align="center">📥 Download & Install</h2>
 
