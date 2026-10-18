@@ -17,7 +17,13 @@ import 'package:Bloomee/services/plugin/plugin_event_bus.dart';
 import 'package:Bloomee/services/plugin/plugin_service.dart';
 import 'package:Bloomee/services/plugin/plugin_storage_service.dart';
 import 'package:Bloomee/plugins/services/plugin_repository_service.dart';
+import 'package:Bloomee/services/db/dao/download_dao.dart';
+import 'package:Bloomee/services/db/dao/history_dao.dart';
+import 'package:Bloomee/services/db/dao/playlist_dao.dart';
 import 'package:Bloomee/services/db/dao/settings_dao.dart';
+import 'package:Bloomee/services/db/dao/track_dao.dart';
+import 'package:Bloomee/services/recommendation/hybrid_recommendation_engine.dart';
+import 'package:Bloomee/services/recommendation/listening_signal_collector.dart';
 
 /// Service locator — static singleton registry.
 ///
@@ -40,6 +46,10 @@ class ServiceLocator {
   static late final CacheDAO cacheDAO;
   static late final PluginCacheRepository pluginCache;
   static late final PluginRepositoryService pluginRepositoryService;
+
+  // ── Recommendation System Singletons ─────────────────────────────────────
+  static late final ListeningSignalCollector signalCollector;
+  static late final HybridRecommendationEngine recommendationEngine;
 
   /// Wire up all application dependencies.
   ///
@@ -77,6 +87,28 @@ class ServiceLocator {
 
     // 4. Plugin service (main interface — initialize later with pluginsDir).
     pluginService = PluginService();
+
+    // 5. Recommendation Engine & Listening Signal Collector
+    final trackDao = TrackDAO(DBProvider.db);
+    final playlistDao = PlaylistDAO(DBProvider.db, trackDao);
+    final historyDao = HistoryDAO(DBProvider.db, trackDao);
+    final downloadDao = DownloadDAO(DBProvider.db, trackDao, playlistDao);
+    final settingsDao = SettingsDAO(DBProvider.db);
+
+    signalCollector = ListeningSignalCollector(
+      settingsDao: settingsDao,
+      historyDao: historyDao,
+      playlistDao: playlistDao,
+    );
+
+    recommendationEngine = HybridRecommendationEngine(
+      signalCollector: signalCollector,
+      historyDao: historyDao,
+      playlistDao: playlistDao,
+      downloadDao: downloadDao,
+      settingsDao: settingsDao,
+      pluginService: pluginService,
+    );
   }
 
   /// Initialize the plugin system.

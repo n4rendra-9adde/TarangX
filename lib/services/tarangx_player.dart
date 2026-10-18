@@ -392,7 +392,12 @@ class TarangXMusicPlayer extends BaseAudioHandler
           engine.state == EngineState.ready &&
           engine.playing) {
         final track = _queueManager.currentTrack;
-        if (track != null) _errorHandler.markTrackSuccess(track.id);
+        if (track != null) {
+          _errorHandler.markTrackSuccess(track.id);
+          try {
+            ServiceLocator.signalCollector.onPositionUpdate(pos, engine.duration);
+          } catch (_) {}
+        }
       }
     });
 
@@ -730,6 +735,10 @@ class TarangXMusicPlayer extends BaseAudioHandler
       // If user paused while loading was taking place, make sure we remain paused
       if (!_userWantsPlayback && engine.playing) {
         await engine.pause();
+      } else if (_userWantsPlayback) {
+        try {
+          ServiceLocator.signalCollector.onTrackStarted(resolvedTrack);
+        } catch (_) {}
       }
 
       isResolving.add(false);
@@ -825,6 +834,9 @@ class TarangXMusicPlayer extends BaseAudioHandler
 
   void _onTrackCompleted() {
     if (loopMode.value == LoopMode.one || _isAdvancing) return;
+    try {
+      ServiceLocator.signalCollector.onTrackEnded(skipped: false);
+    } catch (_) {}
     _isAdvancing = true;
     Future.microtask(() async {
       try {
@@ -983,6 +995,9 @@ class TarangXMusicPlayer extends BaseAudioHandler
   }
 
   Future<void> _internalSkipToNext() async {
+    try {
+      ServiceLocator.signalCollector.onTrackEnded(skipped: true);
+    } catch (_) {}
     _isAdvancing = true;
     try {
       final advanced = _queueManager.advanceToNext(loopMode: loopMode.value);
@@ -1008,6 +1023,9 @@ class TarangXMusicPlayer extends BaseAudioHandler
   }
 
   Future<void> _internalSkipToPrevious() async {
+    try {
+      ServiceLocator.signalCollector.onTrackEnded(skipped: true);
+    } catch (_) {}
     _isAdvancing = true;
     try {
       final advanced =

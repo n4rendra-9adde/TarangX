@@ -5,6 +5,7 @@ import 'package:Bloomee/blocs/lastdotfm/lastdotfm_cubit.dart';
 import 'package:Bloomee/blocs/media_player/tarangx_player_cubit.dart';
 import 'package:Bloomee/blocs/notification/notification_cubit.dart';
 import 'package:Bloomee/blocs/player_overlay/player_overlay_cubit.dart';
+import 'package:Bloomee/blocs/recommendation/cubit/recommendation_cubit.dart';
 import 'package:Bloomee/blocs/settings_cubit/cubit/settings_cubit.dart';
 import 'package:Bloomee/core/di/service_locator.dart';
 import 'package:Bloomee/core/models/exported.dart';
@@ -262,6 +263,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                             },
                           ),
                           const _LanguagePlaylistsSection(),
+                          const _PersonalizedRecommendationsSection(),
                           BlocBuilder<SettingsCubit, SettingsState>(
                             builder: (context, state) {
                               if (state.lFMPicks) {
@@ -1568,9 +1570,9 @@ class _LanguagePlaylistsSectionState extends State<_LanguagePlaylistsSection> {
                               width: 0.8,
                             ),
                           ),
-                          child: Row(
+                          child: const Row(
                             mainAxisSize: MainAxisSize.min,
-                            children: const [
+                            children: [
                               Icon(
                                 MingCute.add_line,
                                 size: 14,
@@ -1868,4 +1870,161 @@ class _LanguagePlaylistCardState extends State<_LanguagePlaylistCard> {
     );
   }
 }
+
+class _PersonalizedRecommendationsSection extends StatelessWidget {
+  const _PersonalizedRecommendationsSection();
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocBuilder<RecommendationCubit, RecommendationState>(
+      builder: (context, state) {
+        if (state is RecommendationLoading) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Center(
+              child: SizedBox(
+                height: 28,
+                width: 28,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Default_Theme.accentColor2,
+                ),
+              ),
+            ),
+          );
+        }
+
+        if (state is RecommendationLoaded && state.recommendedTracks.isNotEmpty) {
+          final isCold = state.isColdStart;
+          final title = isCold ? 'Featured Picks' : 'Recommended for You';
+          final category = isCold ? 'Featured' : 'For You';
+
+          return Padding(
+            padding: const EdgeInsets.only(top: 12.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(
+                            MingCute.sparkles_fill,
+                            size: 18,
+                            color: Default_Theme.accentColor2,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            title,
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Default_Theme.primaryColor1,
+                            ),
+                          ),
+                        ],
+                      ),
+                      IconButton(
+                        icon: const Icon(
+                          MingCute.refresh_3_line,
+                          size: 18,
+                          color: Default_Theme.primaryColor2,
+                        ),
+                        tooltip: 'Refresh recommendations',
+                        onPressed: () {
+                          HapticFeedback.lightImpact();
+                          context.read<RecommendationCubit>().loadRecommendations();
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+                if (state.topArtists.isNotEmpty && !isCold)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 16, bottom: 8),
+                    child: SizedBox(
+                      height: 32,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: state.topArtists.length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 8),
+                        itemBuilder: (context, idx) {
+                          final artist = state.topArtists[idx];
+                          return Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Default_Theme.primaryColor1.withValues(alpha: 0.06),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: Default_Theme.accentColor2.withValues(alpha: 0.25),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  MingCute.user_star_line,
+                                  size: 13,
+                                  color: Default_Theme.accentColor2,
+                                ),
+                                const SizedBox(width: 5),
+                                Text(
+                                  artist,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Default_Theme.primaryColor1.withValues(alpha: 0.85),
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                TabSongListWidget(
+                  list: state.recommendedTracks.map((scored) {
+                    final song = scored.track;
+                    final reason = scored.reason.description;
+                    final subtitle = '${song.artists.map((a) => a.name).join(", ")} • $reason';
+
+                    return SongCardWidget(
+                      song: song,
+                      subtitleOverride: subtitle,
+                      onTap: () {
+                        final tracks = state.recommendedTracks.map((s) => s.track).toList();
+                        context.read<TarangXPlayerCubit>().tarangXPlayer.loadPlaylist(
+                              Playlist(
+                                tracks: tracks,
+                                title: title,
+                              ),
+                              idx: tracks.indexOf(song),
+                              doPlay: true,
+                            );
+                      },
+                      onOptionsTap: () => showMoreBottomSheet(
+                        context,
+                        song,
+                        showSinglePlay: true,
+                      ),
+                    );
+                  }).toList(),
+                  category: category,
+                  columnSize: 3,
+                ),
+              ],
+            ),
+          );
+        }
+
+        return const SizedBox.shrink();
+      },
+    );
+  }
+}
+
 

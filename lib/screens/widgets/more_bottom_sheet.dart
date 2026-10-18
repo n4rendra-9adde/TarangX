@@ -11,6 +11,7 @@ import 'package:Bloomee/blocs/add_to_playlist/cubit/add_to_playlist_cubit.dart';
 import 'package:Bloomee/blocs/downloader/cubit/downloader_cubit.dart';
 import 'package:Bloomee/blocs/library/cubit/library_items_cubit.dart';
 import 'package:Bloomee/blocs/media_player/tarangx_player_cubit.dart';
+import 'package:Bloomee/blocs/recommendation/cubit/recommendation_cubit.dart';
 import 'package:Bloomee/core/constants/route_paths.dart';
 import 'package:Bloomee/core/models/exported.dart';
 import 'package:Bloomee/core/theme/app_theme.dart';
@@ -322,6 +323,20 @@ class _TrackOptionsBottomSheet extends StatelessWidget {
                                 SnackbarService.showMessage(
                                     l10n.menuOpenLinkFailed);
                               }
+                            },
+                          ),
+                          _CompactTile(
+                            icon: MingCute.eye_close_line,
+                            title: "Don't recommend this song",
+                            onTap: (ctx) {
+                              Navigator.pop(ctx);
+                              try {
+                                parentContext
+                                    .read<RecommendationCubit>()
+                                    .dislikeTrack(song);
+                                SnackbarService.showMessage(
+                                    'Will not recommend "${song.title}" again');
+                              } catch (_) {}
                             },
                           ),
                           if (showDelete) ...[

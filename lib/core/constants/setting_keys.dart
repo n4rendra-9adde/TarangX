@@ -61,6 +61,16 @@ class SettingKeys {
   /// JSON-encoded last queue state for session resume.
   static const String lastQueueState = 'lastQueueState';
 
+  // ── Recommendations ─────────────────────────────────────────────────────────
+  /// JSON-encoded list of disliked track media IDs to exclude from recommendations.
+  static const String dislikedTrackIds = "disliked_track_ids";
+
+  /// JSON-encoded list of disliked artist names to exclude/penalize in recommendations.
+  static const String dislikedArtistNames = "disliked_artist_names";
+
+  /// JSON-encoded user taste profile and listening statistics for personalization.
+  static const String recommendationTasteProfile = "recommendation_taste_profile";
+
   // ── Location / charts / languages ──────────────────────────────────────────
   static const String languageCode = "languageCode";
   static const String musicLanguages = "musicLanguages";

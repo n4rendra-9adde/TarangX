@@ -10,6 +10,7 @@ import 'package:Bloomee/blocs/mini_player/mini_player_cubit.dart';
 import 'package:Bloomee/blocs/notification/notification_cubit.dart';
 import 'package:Bloomee/blocs/history/cubit/history_cubit.dart';
 import 'package:Bloomee/blocs/explore/cubit/recently_cubit.dart';
+import 'package:Bloomee/blocs/recommendation/cubit/recommendation_cubit.dart';
 import 'package:Bloomee/blocs/player_overlay/player_overlay_cubit.dart';
 import 'package:Bloomee/blocs/search_suggestions/search_suggestion_bloc.dart';
 import 'package:Bloomee/blocs/settings_cubit/cubit/settings_cubit.dart';
@@ -402,6 +403,13 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         ),
         BlocProvider(
           create: (context) => RecentlyCubit(historyDao),
+          lazy: false,
+        ),
+        BlocProvider(
+          create: (context) => RecommendationCubit(
+            engine: ServiceLocator.recommendationEngine,
+            collector: ServiceLocator.signalCollector,
+          ),
           lazy: false,
         ),
         BlocProvider(

@@ -11,6 +11,7 @@ import 'package:Bloomee/services/db/mappers/playlist_mapper.dart';
 import 'package:equatable/equatable.dart';
 import 'package:Bloomee/screens/widgets/snackbar.dart';
 import 'package:Bloomee/services/db/dao/playlist_dao.dart';
+import 'package:Bloomee/core/di/service_locator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:rxdart/rxdart.dart';
 part 'library_items_state.dart';
@@ -217,6 +218,9 @@ class LibraryItemsCubit extends Cubit<LibraryItemsState> {
   /// Like or unlike a track.
   Future<void> setTrackLiked(Track track, bool liked) async {
     await _playlistDao.setTrackLiked(track, liked);
+    try {
+      ServiceLocator.signalCollector.onTrackLiked(track, liked);
+    } catch (_) {}
   }
 
   /// Get all playlist names containing a given track.
