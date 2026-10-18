@@ -208,7 +208,32 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       unawaited(_ensurePlayerHealthyOnResume());
       // Check for plugin updates when app resumes (30-min cooldown enforced).
       unawaited(_checkPluginUpdatesOnResume());
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      unawaited(_persistPlayerStateOnBackground());
+    } else if (state == AppLifecycleState.detached) {
+      unawaited(_cleanupOnDetached());
     }
+  }
+
+  Future<void> _persistPlayerStateOnBackground() async {
+    try {
+      final player = await PlayerInitializer().getTarangXMusicPlayer();
+      await player.persistCurrentState();
+    } catch (_) {}
+  }
+
+  Future<void> _cleanupOnDetached() async {
+    try {
+      final player = await PlayerInitializer().getTarangXMusicPlayer();
+      await player.persistCurrentState();
+      // On desktop platforms, detached state indicates window exit.
+      // Clean up native playback engine to prevent orphaned threads or lingering audio backend locks.
+      if (!io.Platform.isAndroid && !io.Platform.isIOS) {
+        await player.stop();
+        await player.engine.dispose();
+      }
+    } catch (_) {}
   }
 
   Future<void> _ensurePlayerHealthyOnResume() async {

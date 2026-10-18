@@ -1,6 +1,7 @@
 import 'dart:developer';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:Bloomee/core/adapters/track_adapter.dart';
 import 'package:Bloomee/core/models/exported.dart' hide MediaItem;
@@ -12,7 +13,10 @@ import 'package:Bloomee/plugins/utils/media_id.dart';
 import 'package:Bloomee/plugins/errors/plugin_exceptions.dart';
 import 'package:Bloomee/screens/widgets/snackbar.dart';
 import 'package:Bloomee/services/db/db_provider.dart';
+import 'package:Bloomee/services/db/dao/download_dao.dart';
+import 'package:Bloomee/services/db/dao/playlist_dao.dart';
 import 'package:Bloomee/services/db/dao/settings_dao.dart';
+import 'package:Bloomee/services/db/dao/track_dao.dart';
 import 'package:Bloomee/services/player/media_resolver_service.dart';
 import 'package:Bloomee/services/player/player_engine.dart';
 import 'package:Bloomee/services/player/player_error_handler.dart';
@@ -87,9 +91,15 @@ class TarangXMusicPlayer extends BaseAudioHandler
   StreamSubscription? _errorSub;
   StreamSubscription? _queueSyncSub;
   StreamSubscription? _positionSuccessSub;
+  StreamSubscription? _engineDurationSub;
   StreamSubscription<AudioInterruptionEvent>? _audioInterruptionSub;
   StreamSubscription<void>? _audioNoisySub;
   Timer? _relatedSongTimer;
+
+  // ── Playback intent tracking ───────────────────────────────────────────────
+  // Guards against race condition where the user taps pause while an async
+  // stream resolution or preload is in-flight.
+  bool _userWantsPlayback = false;
 
   // ── Audio session state ────────────────────────────────────────────────────
   AudioSession? _audioSession;
@@ -144,6 +154,15 @@ class TarangXMusicPlayer extends BaseAudioHandler
         final track = _queueManager.currentTrack;
         if (track != null) {
           _updateCurrentTrack(track);
+          // Broadcast restored position and state so mini-player and Now Playing
+          // immediately display the track and progress without starting playback.
+          _broadcastPlaybackState(
+            EngineState.idle,
+            false,
+            _queueManager.restoredPosition,
+            Duration.zero,
+            1.0,
+          );
         }
       }
     } catch (e) {
@@ -250,7 +269,12 @@ class TarangXMusicPlayer extends BaseAudioHandler
   }
 
   void _onHeadphonesUnplugged() {
-    if (!_isDisposed) engine.pause();
+    if (!_isDisposed) {
+      _userWantsPlayback = false;
+      _shouldResumeAfterInterruption = false;
+      engine.pause();
+      unawaited(persistCurrentState());
+    }
   }
 
   // ─── Audio Session Activation ──────────────────────────────────────────────
@@ -320,6 +344,10 @@ class TarangXMusicPlayer extends BaseAudioHandler
 
     _errorHandler.onSkipToNext = _internalSkipToNext;
     _errorHandler.onRetryCurrentTrack = _retryCurrentTrack;
+    _errorHandler.onClearCachedSource = (mediaId) {
+      _clearPreloadedMarker();
+      engine.clearPreload(); // ignore: discarded_futures
+    };
     _errorHandler.onStopPlayback = () async {
       _playCompleter?.operation.cancel();
       _playCompleter = null;
@@ -368,13 +396,25 @@ class TarangXMusicPlayer extends BaseAudioHandler
       }
     });
 
+    // Update notification & MPRIS duration if container metadata was resolved late.
+    _engineDurationSub = engine.durationStream.listen((dur) {
+      if (dur > Duration.zero && mediaItem.value != null) {
+        final curr = mediaItem.value!;
+        if (curr.duration == null || curr.duration == Duration.zero) {
+          mediaItem.add(curr.copyWith(duration: dur));
+        }
+      }
+    });
+
     _completionSub = engine.completionStream.listen((_) => _onTrackCompleted());
 
     _errorSub = engine.errorStream.listen((error) {
-      log('Engine error: $error', name: 'TarangXMusicPlayer');
+      log('Engine error: ${PlayerErrorHandler.sanitizeErrorMessage(error)}',
+          name: 'TarangXMusicPlayer');
       final track = _queueManager.currentTrack;
       if (track != null) {
-        _errorHandler.handleError(PlayerErrorType.playbackError, error, track);
+        final type = _errorHandler.categorizeError(error);
+        _errorHandler.handleError(type, error, track, error);
       }
     });
 
@@ -388,7 +428,7 @@ class TarangXMusicPlayer extends BaseAudioHandler
       EasyThrottle.throttle(
         'persist_queue',
         const Duration(seconds: 2),
-        () => unawaited(_queueManager.persistQueueState()),
+        () => unawaited(persistCurrentState()),
       );
     });
 
@@ -447,6 +487,25 @@ class TarangXMusicPlayer extends BaseAudioHandler
   void _updateCurrentTrack(Track track) {
     _currentTrack = track;
     mediaItem.add(trackToMediaItem(track));
+    if (!_queueManager.isRestoring) {
+      EasyThrottle.throttle(
+        'persist_current_state',
+        const Duration(seconds: 2),
+        () => unawaited(persistCurrentState()),
+      );
+    }
+  }
+
+  /// Explicitly persists current playback queue and position to SettingsDAO.
+  Future<void> persistCurrentState() async {
+    if (_isDisposed) return;
+    try {
+      await _queueManager.persistQueueState(
+        currentPosition: engine.position,
+      );
+    } catch (e) {
+      log('persistCurrentState failed: $e', name: 'TarangXMusicPlayer');
+    }
   }
 
   // ─── Public Playback Controls ─────────────────────────────────────────────
@@ -454,6 +513,7 @@ class TarangXMusicPlayer extends BaseAudioHandler
   @override
   Future<void> play() async {
     if (_isDisposed) return;
+    _userWantsPlayback = true;
     _errorHandler.resetCircuitBreaker();
     _shouldResumeAfterInterruption = false;
     final granted = await _activateAudioSession();
@@ -461,12 +521,17 @@ class TarangXMusicPlayer extends BaseAudioHandler
       SnackbarService.showMessage('Audio focus denied. Cannot start playback.');
       return;
     }
-    // Cold resume: engine has nothing loaded, but queue has a track
-    // (happens after session restore). Resolve and play the current track.
-    if (engine.state == EngineState.idle) {
+    // Cold resume or completed track:
+    // (Happens after session restore or when track reached EOF).
+    if (engine.state == EngineState.idle ||
+        engine.state == EngineState.completed) {
       final track = _queueManager.currentTrack;
       if (track != null) {
-        await _enqueuePlayTrack(track, doPlay: true);
+        final initialPos = (engine.state == EngineState.idle &&
+                _queueManager.restoredPosition > Duration.zero)
+            ? _queueManager.restoredPosition
+            : null;
+        await _enqueuePlayTrack(track, doPlay: true, initialPosition: initialPos);
         return;
       }
     }
@@ -476,9 +541,11 @@ class TarangXMusicPlayer extends BaseAudioHandler
   @override
   Future<void> pause() async {
     if (_isDisposed) return;
-    // Manual pause clears any pending auto-resume.
+    // Manual pause clears any pending auto-resume and records pause intent.
+    _userWantsPlayback = false;
     _shouldResumeAfterInterruption = false;
     await engine.pause();
+    unawaited(persistCurrentState());
   }
 
   @override
@@ -501,6 +568,7 @@ class TarangXMusicPlayer extends BaseAudioHandler
 
   @override
   Future<void> stop() async {
+    _userWantsPlayback = false;
     _errorHandler.resetCircuitBreaker();
     _shouldResumeAfterInterruption = false;
     _playCompleter?.operation.cancel();
@@ -555,6 +623,14 @@ class TarangXMusicPlayer extends BaseAudioHandler
     Duration? initialPosition,
   }) {
     if (_isDisposed) return Future.value();
+    _userWantsPlayback = doPlay;
+
+    // Immediately cancel previous resolve and pre-resolve tasks to prevent race conditions
+    _currentResolveOp?.cancel();
+    _currentResolveOp = null;
+    _preResolveOp?.cancel();
+    _preResolveOp = null;
+    _errorHandler.cancelPendingRetries();
 
     // Cancel any in-flight play operation — user changed track.
     final prev = _playCompleter;
@@ -588,9 +664,10 @@ class TarangXMusicPlayer extends BaseAudioHandler
         _preloadedTrackId == track.id;
 
     try {
+      _errorHandler.registerAttempt(track.id);
       _updateCurrentTrack(track);
 
-      if (doPlay) {
+      if (_userWantsPlayback) {
         final granted = await _activateAudioSession();
         if (!alive()) return;
         if (!granted) {
@@ -610,7 +687,7 @@ class TarangXMusicPlayer extends BaseAudioHandler
         isOffline.add(_preloadedTrackOffline);
         result = engine.crossfadeDuration > Duration.zero
             ? await engine.crossfadeToPreloaded(engine.crossfadeDuration)
-            : await engine.activatePreloaded(autoPlay: doPlay);
+            : await engine.activatePreloaded(autoPlay: _userWantsPlayback);
         _clearPreloadedMarker();
       } else {
         await engine.stop(keepLoadingState: true);
@@ -629,7 +706,7 @@ class TarangXMusicPlayer extends BaseAudioHandler
         result = await engine.openDirect(
           resolved.$2.uri,
           httpHeaders: resolved.$2.headers,
-          autoPlay: doPlay,
+          autoPlay: _userWantsPlayback,
         );
       }
 
@@ -650,6 +727,11 @@ class TarangXMusicPlayer extends BaseAudioHandler
         await engine.seek(initialPosition);
       }
 
+      // If user paused while loading was taking place, make sure we remain paused
+      if (!_userWantsPlayback && engine.playing) {
+        await engine.pause();
+      }
+
       isResolving.add(false);
       _errorHandler.clearError();
       _preResolveNextTrack();
@@ -664,7 +746,7 @@ class TarangXMusicPlayer extends BaseAudioHandler
     } catch (e, stack) {
       isResolving.add(false);
       if (!alive()) return;
-      log('Play failed: ${track.title}: $e',
+      log('Play failed: ${track.title}: ${PlayerErrorHandler.sanitizeErrorMessage(e.toString())}',
           name: 'TarangXMusicPlayer', stackTrace: stack);
       _errorHandler.handleError(
           _errorHandler.categorizeError(e), e.toString(), resolvedTrack, e);
@@ -800,7 +882,9 @@ class TarangXMusicPlayer extends BaseAudioHandler
     if (fromPlaylist.isClosed ||
         isOffline.isClosed ||
         loopMode.isClosed ||
-        isResolving.isClosed) return false;
+        isResolving.isClosed) {
+      return false;
+    }
     try {
       final _ = engine.state;
       return true;
@@ -820,12 +904,18 @@ class TarangXMusicPlayer extends BaseAudioHandler
       _savedPositionForRevive = engine.position;
     } catch (_) {}
 
-    if (fromPlaylist.isClosed)
+    if (fromPlaylist.isClosed) {
       fromPlaylist = BehaviorSubject<bool>.seeded(false);
-    if (isOffline.isClosed) isOffline = BehaviorSubject<bool>.seeded(false);
-    if (loopMode.isClosed)
+    }
+    if (isOffline.isClosed) {
+      isOffline = BehaviorSubject<bool>.seeded(false);
+    }
+    if (loopMode.isClosed) {
       loopMode = BehaviorSubject<LoopMode>.seeded(LoopMode.off);
-    if (isResolving.isClosed) isResolving = BehaviorSubject<bool>.seeded(false);
+    }
+    if (isResolving.isClosed) {
+      isResolving = BehaviorSubject<bool>.seeded(false);
+    }
 
     _shouldResumeAfterInterruption = false;
 
@@ -877,11 +967,11 @@ class TarangXMusicPlayer extends BaseAudioHandler
   // ─── Queue Operations ─────────────────────────────────────────────────────
 
   @override
-  Future<void> playMediaItem(MediaItem mi,
+  Future<void> playMediaItem(MediaItem mediaItem,
       {bool doPlay = true, Duration? initialPosition}) async {
     _errorHandler.resetCircuitBreaker();
     _shouldResumeAfterInterruption = false;
-    await _enqueuePlayTrack(mediaItemToTrack(mi),
+    await _enqueuePlayTrack(mediaItemToTrack(mediaItem),
         doPlay: doPlay, initialPosition: initialPosition);
   }
 
@@ -990,6 +1080,9 @@ class TarangXMusicPlayer extends BaseAudioHandler
       if (doPlay || shuffling) {
         final track = _queueManager.currentTrack;
         if (track != null) await _enqueuePlayTrack(track, doPlay: true);
+      } else {
+        final track = _queueManager.currentTrack;
+        if (track != null) _updateCurrentTrack(track);
       }
     } finally {
       _isAdvancing = false;
@@ -997,16 +1090,16 @@ class TarangXMusicPlayer extends BaseAudioHandler
   }
 
   @override
-  Future<void> addQueueItem(MediaItem mi) async =>
-      _queueManager.addTrack(mediaItemToTrack(mi));
+  Future<void> addQueueItem(MediaItem mediaItem) async =>
+      _queueManager.addTrack(mediaItemToTrack(mediaItem));
 
   Future<void> addQueueTrack(Track track) async =>
       _queueManager.addTrack(track);
 
   @override
-  Future<void> addQueueItems(List<MediaItem> items,
+  Future<void> addQueueItems(List<MediaItem> mediaItems,
           {String queueName = 'Queue', bool atLast = false}) async =>
-      _queueManager.addTracks(items.map(mediaItemToTrack).toList(),
+      _queueManager.addTracks(mediaItems.map(mediaItemToTrack).toList(),
           atLast: atLast);
 
   Future<void> addQueueTracks(List<Track> tracks,
@@ -1029,8 +1122,8 @@ class TarangXMusicPlayer extends BaseAudioHandler
       _queueManager.addPlayNext(track);
 
   @override
-  Future<void> insertQueueItem(int index, MediaItem mi) async =>
-      _queueManager.insertTrack(index, mediaItemToTrack(mi));
+  Future<void> insertQueueItem(int index, MediaItem mediaItem) async =>
+      _queueManager.insertTrack(index, mediaItemToTrack(mediaItem));
 
   @override
   Future<void> removeQueueItemAt(int index) async =>
@@ -1042,12 +1135,15 @@ class TarangXMusicPlayer extends BaseAudioHandler
   void clearQueue() {
     _clearPreloadedMarker();
     _queueManager.clearQueue();
+    if (_queueManager.isEmpty) {
+      mediaItem.add(null);
+    }
   }
 
   @override
-  Future<void> updateQueue(List<MediaItem> newQueue,
+  Future<void> updateQueue(List<MediaItem> queue,
       {bool doPlay = false}) async {
-    _queueManager.updateQueue(newQueue.map(mediaItemToTrack).toList());
+    _queueManager.updateQueue(queue.map(mediaItemToTrack).toList());
     if (doPlay) {
       final t = _queueManager.currentTrack;
       if (t != null) await _enqueuePlayTrack(t, doPlay: true);
@@ -1060,12 +1156,96 @@ class TarangXMusicPlayer extends BaseAudioHandler
   void setRecentlyPlayedPercentThreshold(double p) =>
       _recentlyPlayedTracker.setPercentThreshold(p);
 
+  // ─── Desktop Media / MPRIS / Headset Integrations ─────────────────────────
+
+  @override
+  Future<dynamic> customAction(String name, [Map<String, dynamic>? extras]) async {
+    if (name == 'dbusVolume' && extras != null) {
+      final val = extras['value'];
+      if (val is num) {
+        await engine.setVolume(val.toDouble().clamp(0.0, 1.0));
+        return true;
+      }
+    }
+    return super.customAction(name, extras);
+  }
+
+  @override
+  Future<void> playFromUri(Uri uri, [Map<String, dynamic>? extras]) async {
+    _errorHandler.resetCircuitBreaker();
+    _shouldResumeAfterInterruption = false;
+    try {
+      final title = uri.pathSegments.isNotEmpty
+          ? uri.pathSegments.last.replaceAll(RegExp(r'\.[a-zA-Z0-9]+$'), '')
+          : 'Audio File';
+
+      final trackId = uri.isScheme('file')
+          ? buildLocalMediaId(uri.toFilePath())
+          : 'uri:${uri.toString()}';
+
+      final track = Track(
+        id: trackId,
+        title: title,
+        artists: [
+          ArtistSummary(
+            id: '',
+            name: uri.isScheme('file') ? 'Local File' : 'Stream',
+          )
+        ],
+        album: const AlbumSummary(id: '', title: 'Files', artists: []),
+        thumbnail: const Artwork(url: '', layout: ImageLayout.square),
+        isExplicit: false,
+      );
+
+      if (uri.isScheme('file')) {
+        final filePath = uri.toFilePath();
+        final file = File(filePath);
+        if (await file.exists()) {
+          final trackDao = TrackDAO(DBProvider.db);
+          final playlistDao = PlaylistDAO(DBProvider.db, trackDao);
+          final downloadDao = DownloadDAO(DBProvider.db, trackDao, playlistDao);
+          await downloadDao.putDownloadRecord(
+            fileName: uri.pathSegments.last,
+            filePath: file.parent.path,
+            track: track,
+            lastDownloaded: DateTime.now(),
+          );
+        }
+      }
+
+      await addQueueTrack(track);
+      _queueManager.jumpTo(_queueManager.length - 1);
+      await _enqueuePlayTrack(track, doPlay: true);
+    } catch (e) {
+      log('playFromUri failed: $e', name: 'TarangXMusicPlayer');
+    }
+  }
+
+  @override
+  Future<void> click([MediaButton button = MediaButton.media]) async {
+    switch (button) {
+      case MediaButton.media:
+        if (engine.playing) {
+          await pause();
+        } else {
+          await play();
+        }
+        break;
+      case MediaButton.next:
+        await skipToNext();
+        break;
+      case MediaButton.previous:
+        await skipToPrevious();
+        break;
+    }
+  }
+
   // ─── Lifecycle ─────────────────────────────────────────────────────────────
 
   @override
   Future<void> onTaskRemoved() async {
     // Always persist queue before the OS kills us — this is our last chance.
-    await _queueManager.persistQueueState();
+    await persistCurrentState();
     // Keep playing in background — only stop if nothing is active.
     if (!engine.playing) {
       await stop();
@@ -1098,6 +1278,7 @@ class TarangXMusicPlayer extends BaseAudioHandler
       _errorSub?.cancel() ?? Future.value(),
       _queueSyncSub?.cancel() ?? Future.value(),
       _positionSuccessSub?.cancel() ?? Future.value(),
+      _engineDurationSub?.cancel() ?? Future.value(),
       _audioInterruptionSub?.cancel() ?? Future.value(),
       _audioNoisySub?.cancel() ?? Future.value(),
     ]);

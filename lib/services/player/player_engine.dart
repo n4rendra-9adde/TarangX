@@ -47,6 +47,7 @@ class VolumeFader {
     _timer = Timer.periodic(const Duration(milliseconds: 33), (t) {
       if (_cancelled) {
         t.cancel();
+        _timer = null;
         return;
       }
       final now = DateTime.now().millisecondsSinceEpoch;
@@ -54,7 +55,11 @@ class VolumeFader {
       final vol = startVol + (endVol - startVol) * frac;
       // Fire and forget — do NOT await. Awaiting here would back-pressure the timer.
       player.setVolume(vol.clamp(0.0, 100.0));
-      if (frac >= 1.0) t.cancel();
+      if (frac >= 1.0) {
+        player.setVolume(endVol.clamp(0.0, 100.0));
+        t.cancel();
+        _timer = null;
+      }
     });
   }
 
@@ -99,6 +104,7 @@ class PlayerEngine {
   Map<String, String>? _preloadedNextHeaders;
   bool _standbyPreloaded = false;
 
+  Duration? _pendingSeekPosition;
   LoopMode _loopMode = LoopMode.off;
   double _userVolume = 1.0;
   double _playerAVolume = 100.0;
@@ -189,6 +195,11 @@ class PlayerEngine {
       }),
       _activePlayerSubject.switchMap((p) => p.stream.duration).listen((d) {
         _durationSubject.add(d);
+        if (_pendingSeekPosition != null && d > Duration.zero) {
+          final target = _pendingSeekPosition!;
+          _pendingSeekPosition = null;
+          seek(target);
+        }
         _deriveState();
       }),
       _activePlayerSubject
@@ -259,7 +270,12 @@ class PlayerEngine {
   }
 
   void _handleCompletion() {
-    if (_disposed || !_hasMedia || _loopMode == LoopMode.one) return;
+    if (_disposed || !_hasMedia) return;
+    if (_loopMode == LoopMode.one) {
+      seek(Duration.zero);
+      play();
+      return;
+    }
     _stateSubject.add(EngineState.completed);
     _completionController.add(null);
   }
@@ -572,11 +588,17 @@ class PlayerEngine {
   Future<void> seek(Duration position) async {
     if (_disposed) return;
     final actualDuration = _active.state.duration;
-    if (actualDuration <= Duration.zero) return;
+    if (actualDuration <= Duration.zero) {
+      _pendingSeekPosition = position;
+      _positionSubject.add(position);
+      return;
+    }
     final clamped = Duration(
         milliseconds:
             position.inMilliseconds.clamp(0, actualDuration.inMilliseconds));
+    _pendingSeekPosition = null;
     await _active.seek(clamped);
+    _positionSubject.add(clamped);
   }
 
   Future<void> setVolume(double value) async {
@@ -629,10 +651,11 @@ class PlayerEngine {
       _standbyPreloaded = true;
       _pendingPreloadUri = null;
       _pendingPreloadHeaders = null;
-      log('Preloaded next track: $uri', name: 'PlayerEngine');
+      log('Preloaded next track source (scheme: ${uri.scheme})',
+          name: 'PlayerEngine');
       return true;
     } catch (e) {
-      log('Preload failed: $e', name: 'PlayerEngine');
+      log('Preload failed: ${e.runtimeType}', name: 'PlayerEngine');
       _preloadedNextUri = null;
       _preloadedNextHeaders = null;
       _standbyPreloaded = false;

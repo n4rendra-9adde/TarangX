@@ -83,6 +83,27 @@ class PlayerErrorHandler {
     }
   }
 
+  /// Cancels any active retry timer to prevent race conditions when the user
+  /// navigates away or skips tracks.
+  void cancelPendingRetries() {
+    _reconnectionTimer?.cancel();
+    _reconnectionTimer = null;
+  }
+
+  /// Strips query params, credentials, and sensitive filesystem paths from error strings.
+  static String sanitizeErrorMessage(String msg) {
+    // Strip URL query parameters (tokens, signatures, keys, expires)
+    var sanitized = msg.replaceAllMapped(
+      RegExp(r'(https?://[^\s\?]+)\?[^\s]+'),
+      (match) => match.group(1) ?? '[URL]',
+    );
+    // Strip raw URLs if present in stack traces/messages
+    sanitized = sanitized.replaceAll(RegExp(r'https?://[^\s]+'), '[URL]');
+    // Sanitize local home directories to avoid leaking system usernames
+    sanitized = sanitized.replaceAll(RegExp(r'/home/[^/\s]+'), '/home/...');
+    return sanitized;
+  }
+
   PlayerErrorType categorizeError(dynamic error) {
     final msg = error.toString().toLowerCase();
 
@@ -98,6 +119,7 @@ class PlayerErrorHandler {
         msg.contains('unreachable') ||
         msg.contains('socket') ||
         msg.contains('abnormal eof') ||
+        msg.contains('abort') ||
         error is SocketException ||
         error is TimeoutException) {
       return PlayerErrorType.networkDropped;
@@ -106,7 +128,8 @@ class PlayerErrorHandler {
         msg.contains('format') ||
         msg.contains('unrecognized') ||
         msg.contains('decode') ||
-        msg.contains('demuxer')) {
+        msg.contains('demuxer') ||
+        msg.contains('missing or deleted')) {
       return PlayerErrorType.sourceError;
     } else if (msg.contains('permission') || msg.contains('access denied')) {
       return PlayerErrorType.permissionError;
@@ -114,6 +137,14 @@ class PlayerErrorHandler {
       return PlayerErrorType.bufferingError;
     }
     return PlayerErrorType.unknownError;
+  }
+
+  /// Returns true only for transient errors where a retry has a reasonable
+  /// probability of recovery (e.g. refreshing expired token, network reconnection).
+  bool isTransientError(PlayerErrorType type) {
+    return type == PlayerErrorType.networkDropped ||
+        type == PlayerErrorType.sourceExpired ||
+        type == PlayerErrorType.bufferingError;
   }
 
   void handleError(PlayerErrorType type, String message, Track? track,
@@ -124,16 +155,17 @@ class PlayerErrorHandler {
     // This perfectly eliminates race conditions from libmpv spamming 10 errors for one crash.
     if (_handledFailureSequence == _currentAttemptSequence) {
       dev.log(
-          'Suppressed cascading error for attempt $_currentAttemptSequence: $message',
+          'Suppressed cascading error for attempt $_currentAttemptSequence: ${sanitizeErrorMessage(message)}',
           name: 'PlayerErrorHandler');
       return;
     }
 
     _handledFailureSequence = _currentAttemptSequence;
 
+    final sanitizedMessage = sanitizeErrorMessage(message);
     final error = PlayerError(
       type: type,
-      message: message,
+      message: sanitizedMessage,
       failedTrack: track,
       originalError: originalError,
     );
@@ -141,22 +173,21 @@ class PlayerErrorHandler {
     lastError.add(error);
     dev.log('Player error processed: $error', name: 'PlayerErrorHandler');
 
-    if (type == PlayerErrorType.permissionError) {
-      _handleTrackTotalFailure(track);
-      return;
-    }
-
     if (type == PlayerErrorType.sourceError ||
         type == PlayerErrorType.sourceExpired) {
       onClearCachedSource?.call(track.id);
     }
 
-    if (_currentTrackRetries < _retryConfig.maxRetriesPerTrack) {
+    // Only retry transient errors (network dropped, expired source, temporary buffer stalls).
+    // Permanent errors (missing local file, unsupported codec, permission denied)
+    // skip retries to prevent stalling playback with useless delays.
+    if (isTransientError(type) &&
+        _currentTrackRetries < _retryConfig.maxRetriesPerTrack) {
       _currentTrackRetries++;
       final delay = _calculateRetryDelay(_currentTrackRetries - 1);
 
       SnackbarService.showMessage(
-          '${_getUserFriendlyErrorMessage(type, message)} (Retry $_currentTrackRetries/${_retryConfig.maxRetriesPerTrack})',
+          '${_getUserFriendlyErrorMessage(type, sanitizedMessage)} (Retry $_currentTrackRetries/${_retryConfig.maxRetriesPerTrack})',
           duration: const Duration(seconds: 3));
 
       _reconnectionTimer?.cancel();
@@ -202,7 +233,7 @@ class PlayerErrorHandler {
       case PlayerErrorType.networkDropped:
         return 'Connection dropped, reconnecting...';
       case PlayerErrorType.sourceError:
-        return 'Song format unsupported or corrupted.';
+        return 'Song format unsupported or file missing.';
       case PlayerErrorType.playbackError:
         return 'Playback issue detected.';
       case PlayerErrorType.bufferingError:
@@ -229,10 +260,12 @@ class PlayerErrorHandler {
   }
 
   void resetCircuitBreaker() {
+    cancelPendingRetries();
     _currentTrackId = null;
     _currentTrackRetries = 0;
     _consecutiveTrackFailures = 0;
     _currentTrackHadPlay = false;
+    _handledFailureSequence = -1;
     lastError.add(null);
   }
 

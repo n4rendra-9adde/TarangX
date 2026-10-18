@@ -1,4 +1,5 @@
 import 'dart:developer';
+import 'dart:io';
 
 import 'package:Bloomee/core/events/global_event_bus.dart';
 import 'package:Bloomee/core/constants/setting_keys.dart';
@@ -57,23 +58,38 @@ class MediaResolverService {
 
   /// Resolve [track] into a playable URI.
   Future<ResolvedMediaSource> resolve(Track track) async {
+    final parts = tryParseMediaId(track.id);
+
     // 1. Check for an offline/downloaded version.
     try {
       final down = await _downloadDao.getDownloadRecord(track.id);
       if (down != null) {
-        log('Playing Offline: ${track.title}', name: 'MediaResolverService');
-        return ResolvedMediaSource(
-          uri: Uri.file('${down.filePath}/${down.fileName}'),
-          isOffline: true,
-        );
+        final filePath = '${down.filePath}/${down.fileName}';
+        final file = File(filePath);
+        if (await file.exists()) {
+          log('Playing Offline: ${track.title}', name: 'MediaResolverService');
+          return ResolvedMediaSource(
+            uri: Uri.file(filePath),
+            isOffline: true,
+          );
+        } else {
+          log('Downloaded record exists but file is missing on disk: ${track.title}',
+              name: 'MediaResolverService');
+          if (parts != null && parts.pluginId == 'local') {
+            throw Exception(
+              'Local file for "${track.title}" is missing or deleted from storage.',
+            );
+          }
+          // Online track with missing cached download falls through to fresh stream resolution.
+        }
       }
     } catch (e) {
+      if (parts != null && parts.pluginId == 'local') rethrow;
       log('Download check failed: $e', name: 'MediaResolverService');
-      // Non-fatal — continue to online resolution
+      // Non-fatal for online tracks — continue to online resolution
     }
 
     // 2. Plugin-based stream resolution.
-    final parts = tryParseMediaId(track.id);
     if (parts == null) {
       GlobalEventBus.instance.emitError(
         AppError.malformedMediaId(rawId: track.id),
@@ -161,11 +177,12 @@ class MediaResolverService {
                 uri.scheme != 'https' &&
                 uri.scheme != 'file')) {
           throw Exception(
-            'Invalid stream URL for "${track.title}": $streamUrl',
+            'Invalid stream URL format for "${track.title}"',
           );
         }
 
-        log('Resolved stream: $streamUrl', name: 'MediaResolverService');
+        log('Resolved online stream for "${track.title}" (quality: ${selectedStream?.quality ?? "default"})',
+            name: 'MediaResolverService');
         return ResolvedMediaSource(
           uri: uri,
           isOffline: false,

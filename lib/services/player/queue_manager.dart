@@ -448,15 +448,18 @@ class QueueManager {
 
   // ─── Queue Persistence ───────────────────────────────────────────────────
 
+  Duration _restoredPosition = Duration.zero;
+  Duration get restoredPosition => _restoredPosition;
+
   /// Persist current queue state to DB settings for session restore.
   ///
-  /// Stores only track IDs + index — the full Track objects are already in
+  /// Stores only track IDs + index + position — the full Track objects are already in
   /// TrackDAO from the normal play/add pipeline. This avoids fragile custom
   /// serialization and keeps the persisted payload tiny.
   ///
   /// Called from [TarangXMusicPlayer] via a throttled listener on
-  /// [tracksStream], and eagerly in [onTaskRemoved] as a last-chance save.
-  Future<void> persistQueueState() async {
+  /// [tracksStream], on pause/track change, and eagerly in [onTaskRemoved] as a last-chance save.
+  Future<void> persistQueueState({Duration? currentPosition}) async {
     final tracks = _queue.value;
     if (tracks.isEmpty) return;
     try {
@@ -471,6 +474,7 @@ class QueueManager {
         'trackIds': tracks.map((t) => t.id).toList(),
         'currentIndex': _currentIndex,
         'queueTitle': queueTitle.value,
+        'positionMs': currentPosition?.inMilliseconds ?? 0,
       };
       await dao.putSettingStr(
           SettingKeys.lastQueueState, jsonEncode(queueData));
@@ -511,12 +515,18 @@ class QueueManager {
       final idx = (data['currentIndex'] as int?)
               ?.clamp(0, tracks.length - 1) ??
           0;
+      final posMs = data['positionMs'] as int?;
+      _restoredPosition = (posMs != null && posMs > 0)
+          ? Duration(milliseconds: posMs)
+          : Duration.zero;
+
       _isRestoring = true;
       loadTracks(tracks, idx: idx, playlistName: data['queueTitle'] ?? 'Queue');
       _isRestoring = false;
       return true;
     } catch (e) {
       _isRestoring = false;
+      _restoredPosition = Duration.zero;
       log('Failed to restore queue: $e', name: 'QueueManager');
       return false;
     }
